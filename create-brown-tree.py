@@ -2,7 +2,7 @@
 This is a one-off script to create a tree database file.
 
 It uses the brown.trees primate file from paml.
-Each vertex of an unrooted phylogenetic tree
+Each node of an unrooted phylogenetic tree
 will be associated with an id number.
 Each undirected edge of the tree will be associated with an id number.
 """
@@ -24,8 +24,8 @@ def main():
             'primary key (edge))')
     cursor.execute(
             'create table taxa ('
-            'vertex integer, name text, '
-            'primary key (vertex))')
+            'node integer, name text, '
+            'primary key (node))')
     conn.commit()
 
     # populate the tree topology table
@@ -57,15 +57,15 @@ def main():
     conn.commit()
 
     # populate the taxon name table
-    vertex_name_list = (
+    node_name_list = (
             (0, 'human'),
             (1, 'chimpanzee'),
             (2, 'gibbon'),
             (3, 'orangutan'),
             (4, 'gorilla'),
             )
-    for vertex_name in vertex_name_list:
-        cursor.execute('insert into taxa values (?, ?)', vertex_name)
+    for node_name in node_name_list:
+        cursor.execute('insert into taxa values (?, ?)', node_name)
     conn.commit()
 
     # close the database connection
