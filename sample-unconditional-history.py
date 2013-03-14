@@ -20,7 +20,32 @@ import argparse
 import sqlite3
 
 import numpy as np
+import networkx as nx
 
+
+def sample_history(root, G_dag_in, edge_to_blen_in, distn, Q):
+    """
+    @param root: root of the tree
+    @param G_dag_in: tree as a directed acyclic graph
+    @param edge_to_blen_in: branch length info
+    @param distn: state distribution at the root
+    @param 
+    @return: nx tree, map from edge to blen, map from edge to state
+    """
+    #XXX unfinished
+    # populate the tree topology table
+    edge_va_vb_list = (
+            (0, 0, 5),
+            (1, 1, 5),
+            (2, 2, 6),
+            (3, 3, 6),
+            (4, 4, 7),
+            (5, 6, 7),
+            (6, 5, 7),
+            )
+    for edge_va_vb in edge_va_vb_list:
+        cursor.execute('insert into topo values (?, ?, ?)', edge_va_vb)
+    conn.commit()
 
 def main(args):
 
@@ -63,7 +88,7 @@ def main(args):
             'union '
             'select vb from topo '
             )
-    vertices = list(cursor)
+    vertices = [t[0] for t in cursor]
     nvertices = len(vertices)
     cursor.execute('select edge, va, vb from topo')
     edge_va_vb_list = list(cursor)
@@ -80,6 +105,37 @@ def main(args):
         root = args.root
     else:
         raise Exception('the specified root should be a node index in the tree')
+
+    # build an undirected graph from the tree info
+    G = nx.Graph()
+    for edge, va, vb in edge_va_vb_list:
+        G.add_edge(va, vb)
+
+    # check that the graph is connected and has no cycles
+    if not nx.is_connected(G):
+        raise Exception('the tree is not connected')
+    if nx.cycle_basis(G):
+        raise Exception('the tree has a cycle')
+
+    # build a directed breadth first tree starting at the distinguished vertex
+    G_dag = nx.bfs_tree(G, root)
+
+    # sample the unconditional histories
+    conn = sqlite3.connect('histories.db')
+    cursor = conn.cursor()
+    cursor.execute(
+            'create table histories ('
+            'history integer, '
+            'segment integer, '
+            'va integer, '
+            'vb integer, '
+            'blen real, '
+            'state integer, '
+            'primary key (history, segment))')
+    conn.commit()
+    for i in range(nsamples):
+        pass
+        #XXX unfinished
 
 
 if __name__ == '__main__':
