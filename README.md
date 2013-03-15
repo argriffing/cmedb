@@ -32,3 +32,13 @@ rate matrix format:
     CREATE TABLE states (state integer, name text, primary key (state));
     sqlite> 
 
+sampled substitution history format:
+
+    $ sqlite3 histories.db 
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE histories (history integer, segment integer, va integer, vb integer, blen real, state integer, primary key (history, segment));
+    sqlite> 
+
