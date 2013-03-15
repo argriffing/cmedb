@@ -69,6 +69,8 @@ def gen_branch_history_sample(state_in, blen_in, rates, P):
             return
         distn = P[state]
         new_state = np.dot(np.arange(nstates), np.random.multinomial(1, distn))
+        # convert from numpy integer to python integer
+        new_state = int(new_state)
         yield blen_accum, new_state
 
 
@@ -93,6 +95,8 @@ def sample_history(root, G_dag_in, distn, rates, P):
     # sampling function instead.
     v = np.random.multinomial(1, distn)
     root_state = np.dot(np.arange(nstates), v)
+    # convert from numpy integer to python integer
+    root_state = int(root_state)
     # Initialize the root state.
     vertex_to_state = {root : root_state}
     # Note that the subset of vertices that are shared with the
@@ -226,13 +230,28 @@ def main(args):
             'primary key (history, segment))')
     conn.commit()
 
-    # get the samples
-    print 'histories:'
+    # Get multiple joint substitution event samples on the tree
+    # and put them into the database.
     rates, P = decompose_rates(Q)
-    for i in range(nsamples):
+    for sample_index in range(nsamples):
         G_segmented = sample_history(root, G_dag, distn, rates, P)
-        print nx.to_edgelist(G_segmented)
-        print
+        h_vertices = list(G_segmented)
+        for segment_index, (va, vb) in enumerate(G_segmented.edges()):
+            edge = G_segmented[va][vb]
+            t = (
+                    sample_index,
+                    segment_index,
+                    va,
+                    vb,
+                    edge['blen'],
+                    edge['state'],
+                    )
+            cursor.execute(
+                    'insert into histories values (?, ?, ?, ?, ?, ?)', t)
+        conn.commit()
+    
+    # close the histories connection
+    conn.close()
 
 
 if __name__ == '__main__':
