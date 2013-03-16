@@ -22,6 +22,27 @@ import sqlite3
 import numpy as np
 import networkx as nx
 
+
+def pos_int(x):
+    x = int(x)
+    if x < 1:
+        raise argparse.ArgumentTypeError(
+                'value must be a positive integer')
+    return x
+
+def random_category(distn):
+    """
+    Sample from a categorical distribution.
+    Note that this is not the same as random.choice(distn).
+    Maybe a function like this will eventually appear
+    in python or numpy or scipy.
+    @param distn: categorical distribution as a stochastic vector
+    @return: category index as a python integer
+    """
+    nstates = len(distn)
+    np_index = np.dot(np.arange(nstates), np.random.multinomial(1, distn))
+    return int(np_index)
+
 def decompose_rates(Q):
     """
     Break a rate matrix into two parts.
@@ -68,9 +89,7 @@ def gen_branch_history_sample(state_in, blen_in, rates, P):
         if blen_accum >= blen_in:
             return
         distn = P[state]
-        new_state = np.dot(np.arange(nstates), np.random.multinomial(1, distn))
-        # convert from numpy integer to python integer
-        new_state = int(new_state)
+        new_state = random_category(distn)
         yield blen_accum, new_state
 
 
@@ -90,13 +109,7 @@ def sample_history(root, G_dag_in, distn, rates, P):
     if P.shape != (nstates, nstates):
         raise Exception('nstates mismatch')
     # Sample the initial state from the distribution.
-    # Python and numpy and scipy seem to not have categorial distribution
-    # (weighted choice) implementations, so I will use the multinomial
-    # sampling function instead.
-    v = np.random.multinomial(1, distn)
-    root_state = np.dot(np.arange(nstates), v)
-    # convert from numpy integer to python integer
-    root_state = int(root_state)
+    root_state = random_category(distn)
     # Initialize the root state.
     vertex_to_state = {root : root_state}
     # Note that the subset of vertices that are shared with the
@@ -132,11 +145,100 @@ def sample_history(root, G_dag_in, distn, rates, P):
             vertex_to_state[successor] = segment_state
     return G
 
+def build_single_history_table(
+        conn, table, root, G_dag, distn, states, rates, P):
+    """
+    @param conn: database connection
+    @param table: validated alphanumeric table name
+    @param root: root index of the tree
+    @param G_dag: networkx directed acyclic graph
+    @param distn: state distribution at the root
+    @param states: ordered list of integer states
+    @param rates: rates away from the states
+    @param P: substitution distributions conditional on instantaneous change
+    """
+    # initialize the table
+    cursor = conn.cursor()
+    s = (
+            'create table if not exists {table} ('
+            'segment integer, '
+            'va integer, '
+            'vb integer, '
+            'blen real, '
+            'state integer, '
+            'primary key (segment))'
+            ).format(table=table)
+    cursor.execute(s)
+    conn.commit()
+    # populate the table
+    G_segmented = sample_history(root, G_dag, distn, rates, P)
+    h_vertices = list(G_segmented)
+    for segment_index, (va, vb) in enumerate(G_segmented.edges()):
+        edge = G_segmented[va][vb]
+        s = 'insert into %s values (?, ?, ?, ?, ?)' % table
+        t = (
+                segment_index,
+                va,
+                vb,
+                edge['blen'],
+                states[edge['state']],
+                )
+        cursor.execute(s, t)
+    conn.commit()
+
+def build_multiple_histories_table(
+        nsamples, conn, table, root, G_dag, distn, states, rates, P):
+    """
+    @param nsamples: sample this many histories
+    @param conn: database connection
+    @param table: validated alphanumeric table name
+    @param root: root index of the tree
+    @param G_dag: networkx directed acyclic graph
+    @param distn: state distribution at the root
+    @param states: ordered list of integer states
+    @param rates: rates away from the states
+    @param P: substitution distributions conditional on instantaneous change
+    """
+    # initialize the table
+    cursor = conn.cursor()
+    s = (
+            'create table if not exists {table} ('
+            'history integer, '
+            'segment integer, '
+            'va integer, '
+            'vb integer, '
+            'blen real, '
+            'state integer, '
+            'primary key (history, segment))'
+            ).format(table=table)
+    cursor.execute(s)
+    conn.commit()
+    # populate the table
+    for history_index in range(nsamples):
+        G_segmented = sample_history(root, G_dag, distn, rates, P)
+        h_vertices = list(G_segmented)
+        for segment_index, (va, vb) in enumerate(G_segmented.edges()):
+            edge = G_segmented[va][vb]
+            s = 'insert into %s values (?, ?, ?, ?, ?, ?)' % table
+            t = (
+                    history_index,
+                    segment_index,
+                    va,
+                    vb,
+                    edge['blen'],
+                    states[edge['state']],
+                    )
+            cursor.execute(s, t)
+        conn.commit()
 
 def main(args):
 
     # define the number of histories to sample
     nsamples = args.nsamples
+
+    # validate table name
+    if not args.table.isalnum():
+        raise Exception('table name must be alphanumeric')
 
     # open the rate matrix db file
     # read the rates
@@ -216,41 +318,16 @@ def main(args):
     for a, b in G_dag.edges():
         G_dag[a][b]['blen'] = G[a][b]['blen']
 
-    # sample the unconditional histories
-    conn = sqlite3.connect('histories.db')
-    cursor = conn.cursor()
-    cursor.execute(
-            'create table if not exists histories ('
-            'history integer, '
-            'segment integer, '
-            'va integer, '
-            'vb integer, '
-            'blen real, '
-            'state integer, '
-            'primary key (history, segment))')
-    conn.commit()
-
-    # Get multiple joint substitution event samples on the tree
-    # and put them into the database.
+    # sample the unconditional history or histories
     rates, P = decompose_rates(Q)
-    for sample_index in range(nsamples):
-        G_segmented = sample_history(root, G_dag, distn, rates, P)
-        h_vertices = list(G_segmented)
-        for segment_index, (va, vb) in enumerate(G_segmented.edges()):
-            edge = G_segmented[va][vb]
-            t = (
-                    sample_index,
-                    segment_index,
-                    va,
-                    vb,
-                    edge['blen'],
-                    edge['state'],
-                    )
-            cursor.execute(
-                    'insert into histories values (?, ?, ?, ?, ?, ?)', t)
-        conn.commit()
-    
-    # close the histories connection
+    conn = sqlite3.connect(args.outfile)
+    if args.nsamples == 1:
+        build_single_history_table(
+                conn, args.table, root, G_dag, distn, states, rates, P)
+    else:
+        build_multiple_histories_table(
+                nsamples,
+                conn, args.table, root, G_dag, distn, states, rates, P)
     conn.close()
 
 
@@ -263,7 +340,11 @@ if __name__ == '__main__':
                 'as an sqlite3 database file'))
     parser.add_argument('--root', type=int,
             help='root node index')
-    parser.add_argument('--nsamples', type=int, default=5,
+    parser.add_argument('--nsamples', type=pos_int, default=5,
             help='sample this many histories')
+    parser.add_argument('-o', '--outfile', required=True,
+            help='create this sqlite3 database file')
+    parser.add_argument('--table', required=True,
+            help='name of table to create in the new database')
     main(parser.parse_args())
 
