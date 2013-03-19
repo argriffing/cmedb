@@ -7,8 +7,9 @@ as sqlite3 database files.
 
 import argparse
 import sqlite3
-import cairo
+from collections import defaultdict
 
+import cairo
 import numpy as np
 import networkx as nx
 
@@ -74,24 +75,56 @@ def main(args):
         parity = isostate_to_parity[seg_to_isostate[seg]]
         G.add_edge(va, vb, segment=seg, blen=blen, state=state, parity=parity)
 
+    # define colors associated with edges
+    black_rgb = (0.0, 0.0, 0.0)
+    light_red_rgb = (1.0, 0.6, 0.6)
+    light_blue_rgb = (0.6, 0.6, 1.0)
+    parity_to_rgb = {0 : light_red_rgb, 1 : light_blue_rgb}
+
+    # Get the text labels associated with the edges.
+    # Most edges will have no associated text label.
+    # The longest segment of each isostate subtree
+    # will have a text label that corresponds to the state.
+    isostate_to_blen_seg_pairs = defaultdict(list)
+    for seg, blen in seg_to_blen.items():
+        isostate = seg_to_isostate[seg]
+        blen_seg_pair = (blen, seg)
+        isostate_to_blen_seg_pairs[isostate].append(blen_seg_pair)
+    seg_to_text_label = {}
+    for isostate, blen_seg_pairs in isostate_to_blen_seg_pairs.items():
+        blen, seg = max(blen_seg_pairs)
+        state = seg_to_state[seg]
+        seg_to_text_label[seg] = str(state)
+
     # draw the image
     surface = cairo.SVGSurface('out.svg', screenwidth, screenheight)
     ctx = cairo.Context(surface)
     ctx.translate(screenwidth/2, screenheight/2)
-    #for va, vb, blen, state in va_vb_blen_state_list:
     for va, vb in G.edges():
-        parity = G[va][vb]['parity']
+        seg = G[va][vb]['segment']
+        rgb = parity_to_rgb[G[va][vb]['parity']]
         pa = (vertex_to_2d[va] - mid) * scale
         pb = (vertex_to_2d[vb] - mid) * scale
-        if parity:
-            ctx.set_source_rgb(1.0, 0.6, 0.6)
-        else:
-            ctx.set_source_rgb(0.6, 0.6, 1.0)
+        ctx.set_source_rgb(*rgb)
         ctx.move_to(pa[0], pa[1])
         ctx.line_to(pb[0], pb[1])
         ctx.stroke()
+        text_label = seg_to_text_label.get(seg, None)
+        if text_label is not None:
+            pmid = (pa + pb) / 2.0
+            text_extents = ctx.text_extents(text_label)
+            x_bearing, y_bearing, width, height = text_extents[:4]
+            ctx.set_source_rgb(*black_rgb)
+            ctx.move_to(
+                    pmid[0] - width / 2.0 - x_bearing,
+                    pmid[1] - height / 2.0 - y_bearing,
+                    )
+            ctx.show_text(text_label)
+
+    # finish drawing the image and create the image file
     ctx = None
     surface.finish()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
