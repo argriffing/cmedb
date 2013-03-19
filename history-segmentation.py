@@ -13,7 +13,7 @@ It is actually associated with the isostate label.
 schema
 .
 table isostate
-va integer, vb integer, isostate integer
+segment integer, isostate integer
 .
 table bipartite
 isostate integer, parity integer
@@ -30,7 +30,7 @@ def get_state_segmentation(G_in):
     Segment the tree according to state.
     This does not use the branch lengths or the layout.
     @param G_in: undirected graph with state annotation on edges
-    @return: va_vb_isostate_list, isostate_to_parity
+    @return: segment_isostate_list, isostate_to_parity
     """
 
     # get leaf vertices
@@ -90,12 +90,12 @@ def main(args):
     # read the segmented tree graph
     conn = sqlite3.connect(args.history)
     cursor = conn.cursor()
-    cursor.execute('select va, vb, state from history')
-    va_vb_state_list = list(cursor)
+    cursor.execute('select va, vb, segment, state from history')
+    va_vb_segment_state_list = list(cursor)
     conn.close()
 
     # construct a list of vertices
-    va_list, vb_list, state_list = zip(*va_vb_state_list)
+    va_list, vb_list, segment_list, state_list = zip(*va_vb_segment_state_list)
     vertices = sorted(set(va_list + vb_list))
 
     # some input validation
@@ -104,8 +104,8 @@ def main(args):
 
     # build an undirected graph from the tree info
     G = nx.Graph()
-    for va, vb, state in va_vb_state_list:
-        G.add_edge(va, vb, state=state)
+    for va, vb, segment, state in va_vb_segment_state_list:
+        G.add_edge(va, vb, segment=segment, state=state)
 
     # check that the graph is connected and has no cycles
     if not nx.is_connected(G):
@@ -134,15 +134,17 @@ def main(args):
     cursor = conn.cursor()
     cursor.execute(
             'create table isostate ('
-            'va integer, vb integer, isostate integer, '
-            'primary key (va, vb))')
+            'segment integer, isostate integer, '
+            'primary key (segment))')
     cursor.execute(
             'create table bipartite ('
             'isostate integer, parity integer, '
             'primary key (isostate))')
     conn.commit()
-    for triple in va_vb_isostate_list:
-        cursor.execute('insert into isostate values (?, ?, ?)', triple)
+    for va, vb, isostate_label in va_vb_isostate_list:
+        segment = G[va][vb]['segment']
+        pair = (segment, isostate_label)
+        cursor.execute('insert into isostate values (?, ?)', pair)
     conn.commit()
     for pair in isostate_to_parity.items():
         cursor.execute('insert into bipartite values (?, ?)', pair)
