@@ -73,3 +73,13 @@ segmentation of a sampled history into contiguous isostate regions:
     CREATE TABLE isostate (segment integer, isostate integer, primary key (segment));
     sqlite> 
 
+genetic code:
+
+    $ sqlite3 universal.code.db
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE code (state integer, residue text, codon text, primary key (state));
+    sqlite> 
+
