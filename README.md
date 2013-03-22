@@ -82,4 +82,24 @@ genetic code:
     sqlite> .schema
     CREATE TABLE code (state integer, residue text, codon text, primary key (state));
     sqlite> 
+    
+a single path (not tree) endpoint-conditioned history sample:
+
+    $ sqlite3 pathsample.db
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE history (segment integer, state integer, blen real, primary key (segment));
+    sqlite> 
+
+multiple path (not tree) endpoint-conditioned history samples:
+
+    $ sqlite3 pathsamples.db 
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE histories (history integer, segment integer, state integer, blen real, primary key (history, segment));
+    sqlite> 
 
