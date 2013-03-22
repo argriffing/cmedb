@@ -22,6 +22,14 @@ def nonneg_int(x):
     return x
 
 #XXX this should go into a separate module
+def pos_int(x):
+    x = int(x)
+    if x < 1:
+        raise argparse.ArgumentTypeError(
+                'value must be a positive integer')
+    return x
+
+#XXX this should go into a separate module
 def pos_float(x):
     x = float(x)
     if x <= 0:
@@ -152,6 +160,38 @@ def build_single_history_table(conn, table, states, f_sample):
     conn.commit()
 
 
+def build_multiple_histories_table(conn, table, nsamples, states, f_sample):
+    """
+    @param conn: database connection
+    @param table: validated alphanumeric table name
+    @param nsamples: sample this many path histories
+    @param states: ordered list of integer states
+    @param f_sample: rejection sampling function
+    """
+
+    # create the table
+    cursor = conn.cursor()
+    s = (
+            'create table if not exists {table} ('
+            'history integer, '
+            'segment integer, '
+            'state integer, '
+            'blen real, '
+            'primary key (history, segment))'
+            ).format(table=table)
+    cursor.execute(s)
+    conn.commit()
+
+    # populate the table
+    for history_index in range(nsamples):
+        accepted_path = f_sample()
+        for segment_index, (state_index, blen) in enumerate(accepted_path):
+            s = 'insert into {table} values (?, ?, ?, ?)'.format(table=table)
+            t = (history_index, segment_index, states[state_index], blen)
+            cursor.execute(s, t)
+    conn.commit()
+
+
 def main(args):
 
     # define the number of histories to sample
@@ -198,7 +238,12 @@ def main(args):
 
     # sample some stuff
     conn = sqlite3.connect(args.outfile)
-    build_single_history_table(conn, table_name, states, f_sample)
+    if nsamples == 1:
+        build_single_history_table(
+                conn, table_name, states, f_sample)
+    else:
+        build_multiple_histories_table(
+                conn, table_name, nsamples, states, f_sample)
     conn.close()
 
 
@@ -224,7 +269,7 @@ if __name__ == '__main__':
             help='final state')
     parser.add_argument('--rates', default='rate.matrix.db',
             help='input rate matrix as an sqlite3 database file')
-    parser.add_argument('--nsamples', type=nonneg_int, default=4,
+    parser.add_argument('--nsamples', type=pos_int, default=4,
             help='sample this many endpoint-conditioned histories')
     parser.add_argument('--outfile', default='histories.db',
             help='output path samples as an sqlite3 database file')
