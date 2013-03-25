@@ -89,8 +89,8 @@ def gen_branch_history_sample(state_in, blen_in, rates, P):
         if blen_accum >= blen_in:
             return
         distn = P[state]
-        new_state = random_category(distn)
-        yield blen_accum, new_state
+        state = random_category(distn)
+        yield blen_accum, state
 
 
 def sample_history(root, G_dag_in, distn, rates, P):
