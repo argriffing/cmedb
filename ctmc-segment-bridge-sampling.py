@@ -3,11 +3,14 @@ Sample the state history of a time interval given initial and final state.
 
 For some endpoint conditioned path sampling algorithms, see
 http://www.ncbi.nlm.nih.gov/pmc/articles/PMC2818752/
+Also see the research report from the oxford summer school
+for computational biology titled
+conditional path sampling in continuous-time markov chains.
+author last names are biswas, chan, xiong, tataru, herman, hobolth.
 """
 
 #XXX implement more path sampling methods
 #XXX document the database formats
-#XXX allow single vs multiple path samples
 
 import functools
 import argparse
@@ -16,6 +19,8 @@ import math
 import random
 
 import numpy as np
+import scipy.linalg
+import scipy.optimize
 
 
 #XXX this should go into a separate module
@@ -41,6 +46,16 @@ def pos_float(x):
         raise argparse.ArgumentTypeError(
                 'value must be a positive floating point number')
     return x
+
+#XXX this should go into a separate module
+def assert_stochastic_vector(v):
+    if np.any(v < 0) or np.any(1 < v):
+        raise Exception(
+                'entries of a finite distribution vector should be in '
+                'the inclusive interval [0, 1]')
+    if not np.allclose(np.sum(v), 1):
+        raise Exception(
+                'entries of a finite distribution vector should sum to 1')
 
 #XXX this is copypasted
 def random_category(distn):
@@ -82,7 +97,7 @@ def decompose_rates(Q):
 #XXX this is copypasted
 def gen_branch_history_sample(state_in, blen_in, rates, P, t0=0.0):
     """
-    Path sampling along a branch with a known initial state.
+    Forward path sampling along a branch with a known initial state.
     Yield (transition time, new state) pairs.
     The path sampling is conditional on the initial state
     but it is not conditional on the final state.
@@ -112,10 +127,10 @@ def gen_modified_branch_history_sample(
         initial_state, final_state, blen_in, rates, P, t0=0.0):
     """
     This is a helper function for Nielsen modified rejection sampling.
+    Yield (transition time, new state) pairs.
     The idea is to sample a path which may need to be rejected,
-    but which is slightly more efficient in the sense
-    that it does not need to be rejected as often as the naive
-    forward path sampling.
+    and it is slightly clever in the sense that the path does not
+    need to be rejected as often as do naive forward path samples.
     In more detail, this path sampler will generate paths
     conditional on at least one change occurring on the path,
     when appropriate.
@@ -199,6 +214,157 @@ def get_modified_rejection_sample(
             accepted_path.append((initial_state, total_length))
     return accepted_path
 
+def sample_helper(cdf, u, t):
+    """
+    This is for sampling using an inverse transformation.
+    It is mean to be used with functools.partial().
+    @param cdf: returns a probability given t
+    @param u: a target probability, e.g. drawn from the uniform unit interval
+    @param t: a parameter value to be guessed
+    @return: probability difference, for root finding
+    """
+    return cdf(t) - u
+
+def conditional_waiting_time_cdf(
+        initial_state, next_state, final_state,
+        P, Q, w, U, U_inv, T, p_i, t):
+    """
+    This is a helper function for random sampling via root finding.
+    It assumes that we have already sampled the next state,
+    and that we need to sample the waiting time until that state.
+    The endpoint conditioning makes this tricky.
+    @param initial_state: initial state
+    @param next_state: next state
+    @param final_state: final state
+    @param P: transition matrix depending on the time of the remaining branch
+    @param Q: rate matrix
+    @param w: eigenvalues
+    @param U: part of eigendecomposition
+    @param U_inv: part of eigendecomposition
+    @param T: length of remaining branch
+    @param p_i: a normalizing constant
+    @param t: the waiting time
+    """
+    nstates = P.shape[0]
+    qa = -Q[initial_state, initial_state]
+    qai = Q[initial_state, next_state]
+    Pab = P[initial_state, final_state]
+    v = np.zeros(nstates, dtype=float)
+    for j in range(nstates):
+        denom = w[j] + qa
+        if not denom:
+            v[j] = t * math.exp(T * w[j])
+        else:
+            v[j] = -math.exp(T * w[j]) * math.expm1(-t*denom) / denom
+    U_ij = U[next_state, :]
+    U_inv_jb = U_inv[:, final_state]
+    Fi = (qai / Pab) * np.sum(U_ij * U_inv_jb * v)
+    return Fi / p_i
+
+
+def gen_direct_sample(
+        total_length, initial_state, final_state,
+        Q, w, U, U_inv):
+    """
+    Use direct sampling as opposed to rejection sampling or uniformization.
+    This uses an eigendecomposition of the rate matrix.
+    The U and w are such that Q = U * diag(w) * U_inv in matrix notation.
+    Note that this does not mean that U is assumed to be
+    an orthogonal matrix.
+    @param total_length: length of the path history in continuous time
+    @param initial_state: state index at one end of the history
+    @param final_state: state index at the other end of the history
+    @param Q: rate matrix
+    @param w: eigenvalues part of the rate matrix eigendecomposition
+    @param U: square matrix part of the rate matrix eigendecomposition
+    @param U_inv: square matrix part of the rate matrix eigendecomposition
+    """
+    t = 0
+    T = total_length
+    nstates = Q.shape[0]
+    state = initial_state
+    while True:
+        P = scipy.linalg.expm(Q*T)
+        q = -np.diag(Q)
+        qa = q[state]
+        pa = math.exp(-qa*T) / P[state, state]
+        if state == final_state:
+            if random.random() < pa:
+                return
+        J = np.zeros(nstates, dtype=float)
+        for j in range(nstates):
+            denom = w[j] + qa
+            if not denom:
+                J[j] = T * math.exp(T * w[j])
+            else:
+                J[j] = (math.exp(T * w[j]) - math.exp(-T*qa)) / denom
+        distn = np.empty(nstates, dtype=float)
+        for i in range(nstates):
+            if i == state:
+                distn[i] = pa
+            else:
+                q_ai = Q[state, i]
+                U_ij = U[i, :]
+                U_inv_jb = U_inv[:, final_state]
+                J_aj = J
+                denom = P[state, final_state]
+                distn[i] = q_ai * np.sum(U_ij * U_inv_jb * J_aj) / denom
+        """
+        # check invariants
+        x = sum(distn[j] for j in range(nstates) if j != state)
+        if state == final_state:
+            if not np.allclose(x, 1):
+                raise Exception('distribution is wrong: %s %s' % (x, distn))
+        else:
+            if not np.allclose(x, 1 - pa):
+                raise Exception('distribution is wrong')
+        """
+        #print distn
+        #assert_stochastic_vector(distn)
+        #raise Exception('it is OK')
+        # sample the next state conditional on a state change
+        change_distn = np.array(distn)
+        change_distn[state] = 0
+        change_distn /= np.sum(change_distn)
+        next_state = random_category(change_distn)
+        #
+        # use root-finding to get the waiting time
+        #
+        partial_cdf = functools.partial(
+                conditional_waiting_time_cdf,
+                state, next_state, final_state,
+                P, Q, w, U, U_inv, T, distn[next_state])
+        u = random.random()
+        f = functools.partial(sample_helper, partial_cdf, u)
+        delta_t = scipy.optimize.brentq(f, 0, T)
+        t += delta_t
+        if t > total_length:
+            return
+        T -= delta_t
+        state = next_state
+        yield t, state
+
+def get_direct_sample(
+        total_length, initial_state, final_state,
+        Q, w, U, U_inv):
+    accepted_path = []
+    t_state_pairs = list(gen_direct_sample(
+        total_length, initial_state, final_state, Q, w, U, U_inv))
+    if t_state_pairs:
+        obs_final_length, obs_final_state = t_state_pairs[-1]
+        if obs_final_state == final_state:
+            accum = 0
+            state = initial_state
+            for blen, next_state in t_state_pairs:
+                accepted_path.append((state, blen-accum))
+                state = next_state
+                accum = blen
+            accepted_path.append((state, total_length-accum))
+    elif initial_state == final_state:
+        accepted_path.append((initial_state, total_length))
+    else:
+        raise Exception('invalid path')
+    return accepted_path
 
 def build_single_history_table(conn, table, states, f_sample):
     """
@@ -313,6 +479,20 @@ def main(args):
                 s_to_i[args.initial],
                 s_to_i[args.final],
                 rates, P)
+    elif args.method == 'direct':
+        # FIXME this can be improved by symmetrizing
+        w, U = scipy.linalg.eig(Q, right=True)
+        U_inv = scipy.linalg.inv(U)
+        if not np.allclose(np.eye(nstates), np.dot(U, U_inv)):
+            raise Exception('bad eigenvectors')
+        if not np.allclose(Q, np.dot(U, np.dot(np.diag(w), U_inv))):
+            raise Exception('bad eigendecomposition')
+        f_sample = functools.partial(
+                get_direct_sample,
+                args.elapsed,
+                s_to_i[args.initial],
+                s_to_i[args.final],
+                Q, w, U, U_inv)
     else:
         raise Exception('the requested sampling method is not implemented')
 
@@ -333,8 +513,8 @@ if __name__ == '__main__':
     method_names = (
             'naive-rejection',
             'modified-rejection',
+            'direct',
             #'uniformization',
-            #'direct',
             )
 
     # construct the command line
