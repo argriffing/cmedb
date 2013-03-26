@@ -1,5 +1,5 @@
 """
-Summarize sampled histories.
+Summarize sampled histories by reporting averages of summary statistics.
 
 The output of this script should be an sqlite3 database
 that has the same format as the output of the script
@@ -97,81 +97,6 @@ def assert_detailed_balance(Q, distn):
     S = (Q.T * distn).T
     if not np.allclose(S, S.T):
         raise Exception('the detailed balance equations are not met')
-
-def get_decay_mode_interactions(w, T):
-    """
-    This returns the J ndarray.
-    @param w: eigenvalues
-    @param T: elapsed time
-    @return: a matrix of interactions between pairs of decay modes
-    """
-    nstates = w.shape[0]
-    J = np.empty((nstates, nstates))
-    v = np.exp(w * T)
-    for k in range(nstates):
-        for l in range(nstates):
-            denom = w[k] - w[l]
-            if denom:
-                J[k, l] = (v[k] - v[l]) / denom
-            else:
-                J[k, l] = T * v[k]
-    return J
-
-def get_intermediate_matrix(a, b, distn, V, J):
-    """
-    This returns the Tau ndarray used by the get_expected_* functions.
-    @param a: initial endpoint state
-    @param b: final endpoint state
-    @param distn: prior equilibrium distribution of the time-reversible process
-    @param V: orthogonal matrix as an ndarray
-    @param J: decay mode interactions including eigenvalue information
-    @return: an intermediate matrix for computing expectations
-    """
-    #FIXME: this is translated from (4) in Holmes-Rubin (2002)
-    # and it could be rewritten in linear algebra notation.
-    # presumably Asger Hobolth has done this using R.
-    nstates = V.shape[0]
-    tau_prefix = np.empty_like(J)
-    for i in range(nstates):
-        for j in range(nstates):
-            num = distn[i] * distn[b]
-            den = distn[a] * distn[j]
-            tau_prefix[i, j] = np.sqrt(num / den)
-    tau_suffix = np.zeros_like(J)
-    for i in range(nstates):
-        for j in range(nstates):
-            for k in range(nstates):
-                inner = np.sum(V[j, :] * V[b, :] * J[k, :])
-                tau_suffix[i, j] += V[a, k] * V[i, k] * inner
-    Tau = tau_prefix * tau_suffix
-    return Tau
-
-def get_expected_wait_time(a, b, M, Tau):
-    """
-    This is w hat in Eq. (4) of Holmes-Rubin 2002.
-    @param a: initial endpoint state
-    @param b: final endpoint state
-    @param M: matrix exponential expm(T*R)
-    @param Tau: an intermediate matrix for computing expectations
-    @return: a vector of expected wait times (amount of time spent in state i)
-    """
-    return np.diag(Tau) / M[a, b]
-
-def get_expected_transition_usage(a, b, R, M, Tau):
-    """
-    This is u hat in Eq. (4) of Holmes-Rubin 2002.
-    The diagonal entries of the returned ndarray are meaningless,
-    so they are arbitrarily filled with zeros.
-    @param a: initial endpoint state
-    @param b: final endpoint state
-    @param R: instantaneous transition rate matrix
-    @param M: matrix exponential expm(T*R)
-    @param Tau: an intermediate matrix for computing expectations
-    @return: ndarray with expected count of each transition
-    """
-    U = (R * Tau) / M[a, b]
-    np.fill_diagonal(U, 0)
-    return U
 
 def build_single_history_table(conn, table, states, f_sample):
     """
@@ -474,7 +399,7 @@ def get_summary_expectation_from_histories(states, histories):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--outfile', default='expectations.db',
-            help='output expectations as an sqlite3 database file')
+    parser.add_argument('--outfile', default='averages.db',
+            help='output averages as an sqlite3 database file')
     main(parser.parse_args())
 

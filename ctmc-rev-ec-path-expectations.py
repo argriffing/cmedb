@@ -179,67 +179,6 @@ def get_expected_transition_usage(a, b, R, M, Tau):
     np.fill_diagonal(U, 0)
     return U
 
-def build_single_history_table(conn, table, states, f_sample):
-    """
-    @param conn: database connection
-    @param table: validated alphanumeric table name
-    @param states: ordered list of integer states
-    @param f_sample: rejection sampling function
-    """
-
-    # create the table
-    cursor = conn.cursor()
-    s = (
-            'create table if not exists {table} ('
-            'segment integer, '
-            'state integer, '
-            'blen real, '
-            'primary key (segment))'
-            ).format(table=table)
-    cursor.execute(s)
-    conn.commit()
-
-    # populate the table
-    accepted_path = f_sample()
-    for segment_index, (state_index, blen) in enumerate(accepted_path):
-        triple = (segment_index, states[state_index], blen)
-        s = 'insert into {table} values (?, ?, ?)'.format(table=table)
-        t = triple
-        cursor.execute(s, t)
-    conn.commit()
-
-
-def build_multiple_histories_table(conn, table, nsamples, states, f_sample):
-    """
-    @param conn: database connection
-    @param table: validated alphanumeric table name
-    @param nsamples: sample this many path histories
-    @param states: ordered list of integer states
-    @param f_sample: rejection sampling function
-    """
-
-    # create the table
-    cursor = conn.cursor()
-    s = (
-            'create table if not exists {table} ('
-            'history integer, '
-            'segment integer, '
-            'state integer, '
-            'blen real, '
-            'primary key (history, segment))'
-            ).format(table=table)
-    cursor.execute(s)
-    conn.commit()
-
-    # populate the table
-    for history_index in range(nsamples):
-        accepted_path = f_sample()
-        for segment_index, (state_index, blen) in enumerate(accepted_path):
-            s = 'insert into {table} values (?, ?, ?, ?)'.format(table=table)
-            t = (history_index, segment_index, states[state_index], blen)
-            cursor.execute(s, t)
-    conn.commit()
-
 
 def get_rate_matrix_info(cursor):
     """
