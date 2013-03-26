@@ -529,7 +529,7 @@ if __name__ == '__main__':
     parser.add_argument('--final', type=nonneg_int, required=True,
             help='final state')
     parser.add_argument('--elapsed', type=pos_float, default=1.0,
-            help='final state')
+            help='elapsed time')
     parser.add_argument('--rates', default='rate.matrix.db',
             help='input rate matrix as an sqlite3 database file')
     parser.add_argument('--nsamples', type=pos_int, default=4,
