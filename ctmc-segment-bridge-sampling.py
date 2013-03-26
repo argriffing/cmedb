@@ -7,6 +7,8 @@ Also see the research report from the oxford summer school
 for computational biology titled
 conditional path sampling in continuous-time markov chains.
 author last names are biswas, chan, xiong, tataru, herman, hobolth.
+Actually the summer school pdf has errors in the equations,
+so use the Hobolth and Stone 2009 paper instead.
 """
 
 #XXX implement more path sampling methods
