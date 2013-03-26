@@ -103,3 +103,14 @@ multiple path (not tree) endpoint-conditioned history samples:
     CREATE TABLE histories (history integer, segment integer, state integer, blen real, primary key (history, segment));
     sqlite> 
 
+endpoint-conditioned expectations from a time-reversible rate matrix:
+
+    $ sqlite3 expectations.db                   
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE usage (initial integer, final integer, source integer, sink integer, usage real, primary key (initial, final, source, sink));
+    CREATE TABLE wait (initial integer, final integer, state integer, wait real, primary key (initial, final, state));
+    sqlite> 
+

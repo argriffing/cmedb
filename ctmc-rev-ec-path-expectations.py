@@ -39,6 +39,31 @@ import math
 import numpy as np
 import scipy.linalg
 
+
+#XXX this should go into a separate module
+def nonneg_int(x):
+    x = int(x)
+    if x < 0:
+        raise argparse.ArgumentTypeError(
+                'value must be a non-negative integer')
+    return x
+
+#XXX this should go into a separate module
+def pos_int(x):
+    x = int(x)
+    if x < 1:
+        raise argparse.ArgumentTypeError(
+                'value must be a positive integer')
+    return x
+
+#XXX this should go into a separate module
+def pos_float(x):
+    x = float(x)
+    if x <= 0:
+        raise argparse.ArgumentTypeError(
+                'value must be a positive floating point number')
+    return x
+
 #XXX this should go into a separate module
 def assert_stochastic_vector(v):
     if np.any(v < 0) or np.any(1 < v):
@@ -71,6 +96,7 @@ def assert_detailed_balance(Q, distn):
 
 def get_decay_mode_interactions(w, T):
     """
+    This returns the J ndarray.
     @param w: eigenvalues
     @param T: elapsed time
     @return: a matrix of interactions between pairs of decay modes
@@ -89,6 +115,7 @@ def get_decay_mode_interactions(w, T):
 
 def get_intermediate_matrix(a, b, distn, V, J):
     """
+    This returns the Tau ndarray used by the get_expected_* functions.
     @param a: initial endpoint state
     @param b: final endpoint state
     @param distn: prior equilibrium distribution of the time-reversible process
@@ -107,9 +134,11 @@ def get_intermediate_matrix(a, b, distn, V, J):
             den = distn[a] * distn[j]
             tau_prefix[i, j] = np.sqrt(num / den)
     tau_suffix = np.zeros_like(J)
-    for k in range(nstates):
-        inner = np.sum(V[j, :] * V[b, :] * J[k, :])
-        tau_suffix[i, j] += V[a, k] * V[i, k] * inner
+    for i in range(nstates):
+        for j in range(nstates):
+            for k in range(nstates):
+                inner = np.sum(V[j, :] * V[b, :] * J[k, :])
+                tau_suffix[i, j] += V[a, k] * V[i, k] * inner
     Tau = tau_prefix * tau_suffix
     return Tau
 
@@ -285,8 +314,27 @@ def main(args):
             raise Exception('unknown final state %s' % final_state)
         final_states = [final_state]
 
+    # extract the amount of time along the path
+    T = args.elapsed
+
+    # Compute the matrix exponential M.
+    # This matrix is often represented as P but the Holmes-Rubin (2002)
+    # paper uses the notation M.
+    M = scipy.linalg.expm(Q*T)
+
+    # Use the properties of time-reversibility to symmetrize the rate matrix.
+    # The symmetric matrix S uses the Holmes-Rubin (2002) notation.
+    r = np.sqrt(distn)
+    S = (Q.T * r).T / r
+    if not np.allclose(S, S.T):
+        raise Exception('internal error constructing symmetrized matrix')
+
+    # compute the symmetric eigendecomposition of the symmetric matrix
+    w, V = scipy.linalg.eigh(S)
+
     # compute the exact expectations of the summary statistics
-    
+    J = get_decay_mode_interactions(w, T)
+
     # create the output database file and initialize the cursor
     conn = sqlite3.connect(args.outfile)
     cursor = conn.cursor()
@@ -315,15 +363,56 @@ def main(args):
     conn.commit()
 
     # populate the waiting times table
-    """
-    accepted_path = f_sample()
-    for segment_index, (state_index, blen) in enumerate(accepted_path):
-        triple = (segment_index, states[state_index], blen)
-        s = 'insert into {table} values (?, ?, ?)'.format(table=table)
-        t = triple
-        cursor.execute(s, t)
+    for initial_state in initial_states:
+        for final_state in final_states:
+            a = s_to_i[initial_state]
+            b = s_to_i[final_state]
+            Tau = get_intermediate_matrix(a, b, distn, V, J)
+            wait_times = get_expected_wait_time(a, b, M, Tau)
+            if not np.allclose(np.sum(wait_times), T):
+                print Q
+                print M
+                print distn, r
+                print Tau
+                print initial_state, final_state
+                print wait_times, np.sum(wait_times), T
+                print
+                raise Exception(
+                        'waiting time expectations '
+                        'should add up to the elapsed time')
+            if np.any(wait_times < 0):
+                raise Exception(
+                        'waiting time expectations '
+                        'should be non-negative')
+            for i, wait in enumerate(wait_times):
+                state = s_to_i[i]
+                s = 'insert into wait values (?, ?, ?, ?)'
+                t = (initial_state, final_state, state, wait)
+                cursor.execute(s, t)
     conn.commit()
-    """
+
+    # populate the transition usage expectation table
+    for initial_state in initial_states:
+        for final_state in final_states:
+            a = s_to_i[initial_state]
+            b = s_to_i[final_state]
+            Tau = get_intermediate_matrix(a, b, distn, V, J)
+            usages = get_expected_transition_usage(a, b, Q, M, Tau)
+            if np.any(usages < 0):
+                raise Exception(
+                        'transition usage count expectations '
+                        'should be non-negative')
+            for i, source_state in enumerate(states):
+                for j, sink_state in enumerate(states):
+                    if i != j:
+                        usage = usages[i, j]
+                        s = 'insert into usage values (?, ?, ?, ?, ?)'
+                        t = (
+                                initial_state, final_state,
+                                source_state, sink_state,
+                                usage)
+                        cursor.execute(s, t)
+    conn.commit()
 
     # close the output database connection
     conn.close()
