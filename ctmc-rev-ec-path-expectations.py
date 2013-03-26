@@ -29,16 +29,26 @@ table wait
 initial integer, final integer, state integer, wait real
 table usage
 initial integer, final integer, source integer, sink integer, usage real
-.
 """
 
 import argparse
 import sqlite3
 import math
+import itertools
 
 import numpy as np
 import scipy.linalg
 
+
+#XXX this could go into a module of recipes
+def pairwise(iterable):
+    """
+    This is an itertools recipe.
+    s -> (s0,s1), (s1,s2), (s2, s3), ...
+    """
+    a, b = itertools.tee(iterable)
+    next(b, None)
+    return itertools.izip(a, b)
 
 #XXX this should go into a separate module
 def nonneg_int(x):
@@ -370,13 +380,6 @@ def main(args):
             Tau = get_intermediate_matrix(a, b, distn, V, J)
             wait_times = get_expected_wait_time(a, b, M, Tau)
             if not np.allclose(np.sum(wait_times), T):
-                print Q
-                print M
-                print distn, r
-                print Tau
-                print initial_state, final_state
-                print wait_times, np.sum(wait_times), T
-                print
                 raise Exception(
                         'waiting time expectations '
                         'should add up to the elapsed time')
@@ -418,8 +421,65 @@ def main(args):
     conn.close()
 
 
+def get_summary_from_history(states, history):
+    """
+    Each history is a sample path.
+    Each sample path is a sequence of (state, wait) pairs.
+    The output wait times is a vector of expected wait times per history.
+    The output transition time matrix is a square ndarray
+    of expected transition counts per history.
+    Because this function acts on only a single history,
+    the expectations are just the counts of observed values.
+    @param states: ordered states
+    @param history: a single sample path
+    @return: wait_times, transition_counts
+    """
+
+    # Precompute the map from states to state indices.
+    s_to_i = dict((s, i) for i, s in enumerate(states))
+    nstates = len(states)
+
+    # Get the wait time expectations from the sampled paths.
+    wait_times = np.zeros(nstates, dtype=float)
+    for state, wait in history:
+        wait_times[state] += wait
+
+    # Count the number of each transition along the path.
+    transition_counts = np.zeros((nstates, nstates), dtype=float)
+    for ((state_a, wait_a), (state_b, wait_b)) in pairwise(history):
+        a = s_to_i[state_a]
+        b = s_to_i[state_b]
+        transition_counts[a, b] += 1
+
+    # Return the wait times and transition counts for this single history.
+    return wait_times, transition_counts
+
+
+def get_summary_expectation_from_histories(states, histories):
+    """
+    Each history is a sample path.
+    Each sample path is a sequence of (state, blen) pairs.
+    The output wait times is a vector of expected wait times per history.
+    The output transition time matrix is a square ndarray
+    of expected transition counts per history.
+    @param states: ordered states
+    @param histories: sequence of sample paths
+    @return: wait times expectation, transition count expectation
+    """
+    nhistories = len(histories)
+    wait_time_expectation = np.zeros(nstates, dtype=float)
+    transition_count_expectation = np.zeros((nstates, nstates), dtype=float)
+    for history in histories:
+        waits, trans = get_expectation_from_history(states, history)
+        wait_time_expectation += waits
+        transition_count_expectation += trans
+    wait_time_expectation /= float(nhistories)
+    transition_count_expectation /= float(nhistories)
+    return wait_time_expectation, transition_count_expectation
+
 
 if __name__ == '__main__':
+
     # Input requirements for Holmes-Rubin (2002) expectations:
     # - time-reversible rate matrix
     # - equilibrium distribution
