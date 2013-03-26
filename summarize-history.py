@@ -78,76 +78,39 @@ def assert_stochastic_vector(v):
         raise Exception(
                 'entries of a finite distribution vector should sum to 1')
 
-#XXX this should go into a separate module
-def assert_rate_matrix(Q):
-    if not np.allclose(np.sum(Q, axis=1), 0):
-        raise Exception('expected rate matrix rows to sum to zero')
-    if np.any(np.diag(Q) > 0):
-        raise Exception('expected rate matrix diagonals to be non-positive')
-    if np.any(Q - np.diag(np.diag(Q)) < 0):
-        raise Exception('expected rate matrix off-diagonals to be non-negative')
-
-#XXX this should go into a separate module
-def assert_equilibrium(Q, distn):
-    if not np.allclose(np.dot(distn, Q), 0):
-        raise Exception('the distribution is not at equilibrium')
-
-#XXX this should go into a separate module
-def assert_detailed_balance(Q, distn):
-    S = (Q.T * distn).T
-    if not np.allclose(S, S.T):
-        raise Exception('the detailed balance equations are not met')
-
 
 def main(args):
 
-    # read and validate the rate matrix info from the sqlite3 database file
-    conn = sqlite3.connect(args.rates)
+    # read the path histories from the sqlite3 database file
+    conn = sqlite3.connect(args.histories)
     cursor = conn.cursor()
-    states, distn, Q = get_rate_matrix_info(cursor)
+    cursor.execute('select history, segment, state, blen from histories')
+    data = sorted(cursor)
+    states = sorted(cursor.execute('select state from histories'))
     conn.close()
 
-    # compute the map from state to state index
+    # Define the map from state to rate matrix index,
+    # and count the number of different states in the history.
     s_to_i = dict((s, i) for i, s in enumerate(states))
+    nstates = len(states)
 
-    # define the initial states of interest
-    if args.initial is None:
-        initial_states = states
-    else:
-        initial_state = args.initial
-        if initial_state not in states:
-            raise Exception('unknown initial state %s' % initial_state)
-        initial_states = [initial_state]
+    # parse the sample path histories from the table
+    histories = []
+    segment = []
+    for history_index, segment_index, state, blen in data:
+        if history_index == len(histories):
+            histories.append(segment)
+            segment = []
+        if history_index != len(histories) - 1:
+            raise Exception('invalid history index')
+        if segment_index != len(segment):
+            raise Exception('invalid segment index')
+        segment.append((state, blen))
+    histories.append(segment)
 
-    # define the final states of interest
-    if args.final is None:
-        final_states = states
-    else:
-        final_state = args.final
-        if final_state not in states:
-            raise Exception('unknown final state %s' % final_state)
-        final_states = [final_state]
-
-    # extract the amount of time along the path
-    T = args.elapsed
-
-    # Compute the matrix exponential M.
-    # This matrix is often represented as P but the Holmes-Rubin (2002)
-    # paper uses the notation M.
-    M = scipy.linalg.expm(Q*T)
-
-    # Use the properties of time-reversibility to symmetrize the rate matrix.
-    # The symmetric matrix S uses the Holmes-Rubin (2002) notation.
-    r = np.sqrt(distn)
-    S = (Q.T * r).T / r
-    if not np.allclose(S, S.T):
-        raise Exception('internal error constructing symmetrized matrix')
-
-    # compute the symmetric eigendecomposition of the symmetric matrix
-    w, V = scipy.linalg.eigh(S)
-
-    # compute the exact expectations of the summary statistics
-    J = get_decay_mode_interactions(w, T)
+    # get the averages from the histories
+    average_weight_times, average_transition_counts = get_summary_averages(
+            states, histories)
 
     # create the output database file and initialize the cursor
     conn = sqlite3.connect(args.outfile)
@@ -225,6 +188,7 @@ def main(args):
     conn.close()
 
 
+#FIXME this needs the endpoint conditioning!
 def get_summary_from_history(states, history):
     """
     Each history is a sample path.
@@ -251,15 +215,16 @@ def get_summary_from_history(states, history):
     # Count the number of each transition along the path.
     transition_counts = np.zeros((nstates, nstates), dtype=float)
     for ((state_a, wait_a), (state_b, wait_b)) in pairwise(history):
-        a = s_to_i[state_a]
-        b = s_to_i[state_b]
+        i = s_to_i[state_i]
+        j = s_to_i[state_j]
         transition_counts[a, b] += 1
 
     # Return the wait times and transition counts for this single history.
     return wait_times, transition_counts
 
 
-def get_summary_expectation_from_histories(states, histories):
+#FIXME this needs the endpoint conditioning!
+def get_summary_averages(states, histories):
     """
     Each history is a sample path.
     Each sample path is a sequence of (state, blen) pairs.
@@ -268,7 +233,7 @@ def get_summary_expectation_from_histories(states, histories):
     of expected transition counts per history.
     @param states: ordered states
     @param histories: sequence of sample paths
-    @return: wait times expectation, transition count expectation
+    @return: wait times averages, transition count averages
     """
     nhistories = len(histories)
     wait_time_expectation = np.zeros(nstates, dtype=float)
@@ -284,6 +249,8 @@ def get_summary_expectation_from_histories(states, histories):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--histories', default='histories.db',
+            help='input path histories as an sqlite3 database file')
     parser.add_argument('--outfile', default='averages.db',
             help='output averages as an sqlite3 database file')
     main(parser.parse_args())
