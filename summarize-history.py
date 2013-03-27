@@ -31,7 +31,6 @@ import math
 import itertools
 
 import numpy as np
-import scipy.linalg
 
 
 #XXX this could go into a module of recipes
@@ -44,40 +43,6 @@ def pairwise(iterable):
     next(b, None)
     return itertools.izip(a, b)
 
-#XXX this should go into a separate module
-def nonneg_int(x):
-    x = int(x)
-    if x < 0:
-        raise argparse.ArgumentTypeError(
-                'value must be a non-negative integer')
-    return x
-
-#XXX this should go into a separate module
-def pos_int(x):
-    x = int(x)
-    if x < 1:
-        raise argparse.ArgumentTypeError(
-                'value must be a positive integer')
-    return x
-
-#XXX this should go into a separate module
-def pos_float(x):
-    x = float(x)
-    if x <= 0:
-        raise argparse.ArgumentTypeError(
-                'value must be a positive floating point number')
-    return x
-
-#XXX this should go into a separate module
-def assert_stochastic_vector(v):
-    if np.any(v < 0) or np.any(1 < v):
-        raise Exception(
-                'entries of a finite distribution vector should be in '
-                'the inclusive interval [0, 1]')
-    if not np.allclose(np.sum(v), 1):
-        raise Exception(
-                'entries of a finite distribution vector should sum to 1')
-
 
 def main(args):
 
@@ -86,8 +51,11 @@ def main(args):
     cursor = conn.cursor()
     cursor.execute('select history, segment, state, blen from histories')
     data = sorted(cursor)
-    states = sorted(cursor.execute('select state from histories'))
+    cursor.execute('select state from histories')
+    states = sorted(set(t[0] for t in cursor))
     conn.close()
+
+    print 'states:', states
 
     # Define the map from state to rate matrix index,
     # and count the number of different states in the history.
@@ -97,11 +65,13 @@ def main(args):
     # parse the sample path histories from the table
     histories = []
     segment = []
-    for history_index, segment_index, state, blen in data:
-        if history_index == len(histories):
+    for row in data:
+        history_index, segment_index, state, blen = row
+        if history_index > len(histories):
             histories.append(segment)
             segment = []
-        if history_index != len(histories) - 1:
+        if history_index != len(histories):
+            print row
             raise Exception('invalid history index')
         if segment_index != len(segment):
             raise Exception('invalid segment index')
@@ -140,34 +110,27 @@ def main(args):
     conn.commit()
 
     # populate the waiting times table
-    for initial_state in initial_states:
-        for final_state in final_states:
+    for initial_state in states:
+        for final_state in states:
             a = s_to_i[initial_state]
             b = s_to_i[final_state]
-            Tau = get_intermediate_matrix(a, b, distn, V, J)
-            wait_times = get_expected_wait_time(a, b, M, Tau)
-            if not np.allclose(np.sum(wait_times), T):
-                raise Exception(
-                        'waiting time expectations '
-                        'should add up to the elapsed time')
+            wait_times = average_weight_times[a, b]
             if np.any(wait_times < 0):
                 raise Exception(
                         'waiting time expectations '
                         'should be non-negative')
-            for i, wait in enumerate(wait_times):
-                state = s_to_i[i]
+            for state, wait in zip(states, wait_times):
                 s = 'insert into wait values (?, ?, ?, ?)'
                 t = (initial_state, final_state, state, wait)
                 cursor.execute(s, t)
     conn.commit()
 
     # populate the transition usage expectation table
-    for initial_state in initial_states:
-        for final_state in final_states:
+    for initial_state in states:
+        for final_state in states:
             a = s_to_i[initial_state]
             b = s_to_i[final_state]
-            Tau = get_intermediate_matrix(a, b, distn, V, J)
-            usages = get_expected_transition_usage(a, b, Q, M, Tau)
+            usages = average_transition_counts[a, b]
             if np.any(usages < 0):
                 raise Exception(
                         'transition usage count expectations '
@@ -188,7 +151,6 @@ def main(args):
     conn.close()
 
 
-#FIXME this needs the endpoint conditioning!
 def get_summary_from_history(states, history):
     """
     Each history is a sample path.
@@ -205,25 +167,24 @@ def get_summary_from_history(states, history):
 
     # Precompute the map from states to state indices.
     s_to_i = dict((s, i) for i, s in enumerate(states))
-    nstates = len(states)
+    n = len(states)
 
     # Get the wait time expectations from the sampled paths.
-    wait_times = np.zeros(nstates, dtype=float)
+    wait_times = np.zeros(n, dtype=float)
     for state, wait in history:
         wait_times[state] += wait
 
     # Count the number of each transition along the path.
-    transition_counts = np.zeros((nstates, nstates), dtype=float)
+    transition_counts = np.zeros((n, n), dtype=float)
     for ((state_a, wait_a), (state_b, wait_b)) in pairwise(history):
-        i = s_to_i[state_i]
-        j = s_to_i[state_j]
-        transition_counts[a, b] += 1
+        i = s_to_i[state_a]
+        j = s_to_i[state_b]
+        transition_counts[i, j] += 1
 
     # Return the wait times and transition counts for this single history.
     return wait_times, transition_counts
 
 
-#FIXME this needs the endpoint conditioning!
 def get_summary_averages(states, histories):
     """
     Each history is a sample path.
@@ -235,16 +196,26 @@ def get_summary_averages(states, histories):
     @param histories: sequence of sample paths
     @return: wait times averages, transition count averages
     """
+
+    # Precompute the map from states to state indices.
+    s_to_i = dict((s, i) for i, s in enumerate(states))
+    n = len(states)
+
+    # Compute the summary statistics of the sampled paths.
     nhistories = len(histories)
-    wait_time_expectation = np.zeros(nstates, dtype=float)
-    transition_count_expectation = np.zeros((nstates, nstates), dtype=float)
+    average_wait_times = np.zeros((n, n, n), dtype=float)
+    average_transition_counts = np.zeros((n, n, n, n), dtype=float)
     for history in histories:
-        waits, trans = get_expectation_from_history(states, history)
-        wait_time_expectation += waits
-        transition_count_expectation += trans
-    wait_time_expectation /= float(nhistories)
-    transition_count_expectation /= float(nhistories)
-    return wait_time_expectation, transition_count_expectation
+        initial_state, initial_blen = history[0]
+        final_state, final_blen = history[-1]
+        a = s_to_i[initial_state]
+        b = s_to_i[final_state]
+        waits, trans = get_summary_from_history(states, history)
+        average_wait_times[a, b] += waits
+        average_transition_counts[a, b] += trans
+    average_wait_times /= float(nhistories)
+    average_transition_counts /= float(nhistories)
+    return average_wait_times, average_transition_counts
 
 
 if __name__ == '__main__':

@@ -326,8 +326,7 @@ def main(args):
                 raise Exception(
                         'waiting time expectations '
                         'should be non-negative')
-            for i, wait in enumerate(wait_times):
-                state = s_to_i[i]
+            for state, wait in zip(states, wait_times):
                 s = 'insert into wait values (?, ?, ?, ?)'
                 t = (initial_state, final_state, state, wait)
                 cursor.execute(s, t)
