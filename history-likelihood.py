@@ -182,7 +182,7 @@ def main(args):
     likelihoods = []
     for history in histories:
         likelihood = get_conditional_likelihood_from_history(
-                rates, P, states, history)
+                Q, rates, P, states, history)
         likelihoods.append(likelihood)
 
     # report likelihood summary
@@ -192,12 +192,14 @@ def main(args):
     print
 
 
-def get_conditional_likelihood_from_history(rates, P, states, history):
+def get_conditional_likelihood_from_history(Q, rates, P, states, history):
     """
     Each history is a sample path.
     Each sample path is a sequence of (state, wait) pairs.
     Return the likelihood conditional on the initial state.
     @param Q: rate matrix
+    @param rates: rate away from each state
+    @param P: instantaneous transition probability distributions
     @param states: ordered states
     @param history: a single sample path
     @return: likelihood conditional on initial state
