@@ -55,8 +55,6 @@ def main(args):
     states = sorted(set(t[0] for t in cursor))
     conn.close()
 
-    print 'states:', states
-
     # Define the map from state to rate matrix index,
     # and count the number of different states in the history.
     s_to_i = dict((s, i) for i, s in enumerate(states))
@@ -172,7 +170,8 @@ def get_summary_from_history(states, history):
     # Get the wait time expectations from the sampled paths.
     wait_times = np.zeros(n, dtype=float)
     for state, wait in history:
-        wait_times[state] += wait
+        i = s_to_i[state_a]
+        wait_times[i] += wait
 
     # Count the number of each transition along the path.
     transition_counts = np.zeros((n, n), dtype=float)

@@ -115,9 +115,6 @@ def main(args):
     states, distn, Q = get_rate_matrix_info(cursor)
     conn.close()
 
-    # compute the map from state to state index
-    s_to_i = dict((s, i) for i, s in enumerate(states))
-
     # extract the amount of time along the path
     T = args.elapsed
 
