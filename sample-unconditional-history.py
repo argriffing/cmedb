@@ -22,13 +22,7 @@ import sqlite3
 import numpy as np
 import networkx as nx
 
-
-def pos_int(x):
-    x = int(x)
-    if x < 1:
-        raise argparse.ArgumentTypeError(
-                'value must be a positive integer')
-    return x
+import cmedbutil
 
 def random_category(distn):
     """
@@ -340,7 +334,7 @@ if __name__ == '__main__':
                 'as an sqlite3 database file'))
     parser.add_argument('--root', type=int,
             help='root node index')
-    parser.add_argument('--nsamples', type=pos_int, default=5,
+    parser.add_argument('--nsamples', type=cmedbutil.pos_int, default=5,
             help='sample this many histories')
     parser.add_argument('-o', '--outfile', required=True,
             help='create this sqlite3 database file')

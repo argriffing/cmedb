@@ -24,40 +24,8 @@ import numpy as np
 import scipy.linalg
 import scipy.optimize
 
+import cmedbutil
 
-#XXX this should go into a separate module
-def nonneg_int(x):
-    x = int(x)
-    if x < 0:
-        raise argparse.ArgumentTypeError(
-                'value must be a non-negative integer')
-    return x
-
-#XXX this should go into a separate module
-def pos_int(x):
-    x = int(x)
-    if x < 1:
-        raise argparse.ArgumentTypeError(
-                'value must be a positive integer')
-    return x
-
-#XXX this should go into a separate module
-def pos_float(x):
-    x = float(x)
-    if x <= 0:
-        raise argparse.ArgumentTypeError(
-                'value must be a positive floating point number')
-    return x
-
-#XXX this should go into a separate module
-def assert_stochastic_vector(v):
-    if np.any(v < 0) or np.any(1 < v):
-        raise Exception(
-                'entries of a finite distribution vector should be in '
-                'the inclusive interval [0, 1]')
-    if not np.allclose(np.sum(v), 1):
-        raise Exception(
-                'entries of a finite distribution vector should sum to 1')
 
 #XXX this is copypasted
 def random_category(distn):
@@ -524,15 +492,15 @@ if __name__ == '__main__':
     parser.add_argument('--method', choices=method_names,
             default='naive-rejection',
             help='use this sampling method')
-    parser.add_argument('--initial', type=nonneg_int, required=True,
+    parser.add_argument('--initial', type=cmedbutil.nonneg_int, required=True,
             help='initial state')
-    parser.add_argument('--final', type=nonneg_int, required=True,
+    parser.add_argument('--final', type=cmedbutil.nonneg_int, required=True,
             help='final state')
-    parser.add_argument('--elapsed', type=pos_float, default=1.0,
+    parser.add_argument('--elapsed', type=cmedbutil.pos_float, default=1.0,
             help='elapsed time')
     parser.add_argument('--rates', default='rate.matrix.db',
             help='input rate matrix as an sqlite3 database file')
-    parser.add_argument('--nsamples', type=pos_int, default=4,
+    parser.add_argument('--nsamples', type=cmedbutil.pos_int, default=4,
             help='sample this many endpoint-conditioned histories')
     parser.add_argument('--outfile', default='histories.db',
             help='output path samples as an sqlite3 database file')

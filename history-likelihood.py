@@ -17,46 +17,8 @@ import itertools
 import numpy as np
 import scipy.stats
 
+import cmedbutil
 
-#XXX this could go into a module of recipes
-def pairwise(iterable):
-    """
-    This is an itertools recipe.
-    s -> (s0,s1), (s1,s2), (s2, s3), ...
-    """
-    a, b = itertools.tee(iterable)
-    next(b, None)
-    return itertools.izip(a, b)
-
-#XXX this should go into a separate module
-def assert_stochastic_vector(v):
-    if np.any(v < 0) or np.any(1 < v):
-        raise Exception(
-                'entries of a finite distribution vector should be in '
-                'the inclusive interval [0, 1]')
-    if not np.allclose(np.sum(v), 1):
-        raise Exception(
-                'entries of a finite distribution vector should sum to 1')
-
-#XXX this should go into a separate module
-def assert_rate_matrix(Q):
-    if not np.allclose(np.sum(Q, axis=1), 0):
-        raise Exception('expected rate matrix rows to sum to zero')
-    if np.any(np.diag(Q) > 0):
-        raise Exception('expected rate matrix diagonals to be non-positive')
-    if np.any(Q - np.diag(np.diag(Q)) < 0):
-        raise Exception('expected rate matrix off-diagonals to be non-negative')
-
-#XXX this should go into a separate module
-def assert_equilibrium(Q, distn):
-    if not np.allclose(np.dot(distn, Q), 0):
-        raise Exception('the distribution is not at equilibrium')
-
-#XXX this should go into a separate module
-def assert_detailed_balance(Q, distn):
-    S = (Q.T * distn).T
-    if not np.allclose(S, S.T):
-        raise Exception('the detailed balance equations are not met')
 
 #XXX this is copypasted
 def decompose_rates(Q):
@@ -122,16 +84,16 @@ def get_rate_matrix_info(cursor):
         distn[s_to_i[state]] = prob
 
     # assert that the distribution has the right form
-    assert_stochastic_vector(distn)
+    cmedbutil.assert_stochastic_vector(distn)
 
     # assert that the rate matrix is actually a rate matrix
-    assert_rate_matrix(Q)
+    cmedbutil.assert_rate_matrix(Q)
 
     # assert that the distribution is at equilibrium w.r.t. the rate matrix
-    assert_equilibrium(Q, distn)
+    cmedbutil.assert_equilibrium(Q, distn)
 
     # assert that the detailed balance equations are met
-    assert_detailed_balance(Q, distn)
+    cmedbutil.assert_detailed_balance(Q, distn)
 
     # return the validated inputs describing the stochastic process
     return states, distn, Q
@@ -221,7 +183,7 @@ def get_conditional_likelihood_from_history(Q, rates, P, states, history):
         likelihood *= math.exp(-q*wait)
 
     # Add transition contributions.
-    for ((state_a, wait_a), (state_b, wait_b)) in pairwise(history):
+    for ((state_a, wait_a), (state_b, wait_b)) in cmedbutil.pairwise(history):
         i = s_to_i[state_a]
         j = s_to_i[state_b]
         q = rates[i]

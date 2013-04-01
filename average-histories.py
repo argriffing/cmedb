@@ -32,16 +32,7 @@ import itertools
 
 import numpy as np
 
-
-#XXX this could go into a module of recipes
-def pairwise(iterable):
-    """
-    This is an itertools recipe.
-    s -> (s0,s1), (s1,s2), (s2, s3), ...
-    """
-    a, b = itertools.tee(iterable)
-    next(b, None)
-    return itertools.izip(a, b)
+import cmedbutil
 
 
 def main(args):
@@ -175,7 +166,7 @@ def get_summary_from_history(states, history):
 
     # Count the number of each transition along the path.
     transition_counts = np.zeros((n, n), dtype=float)
-    for ((state_a, wait_a), (state_b, wait_b)) in pairwise(history):
+    for ((state_a, wait_a), (state_b, wait_b)) in cmedbutil.pairwise(history):
         i = s_to_i[state_a]
         j = s_to_i[state_b]
         transition_counts[i, j] += 1
