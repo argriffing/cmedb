@@ -6,6 +6,7 @@ import itertools
 import argparse
 
 import numpy as np
+import networkx as nx
 
 
 ###############################################################################
@@ -77,6 +78,20 @@ def assert_detailed_balance(Q, distn):
 
 
 ###############################################################################
+# Validation of invariants related to unrooted trees with edge lengths.
+
+def assert_connected_acyclic_graph(G):
+    """
+    Check that the graph is connected and has no cycles.
+    @param G: networkx undirected graph
+    """
+    if not nx.is_connected(G):
+        raise Exception('the graph is not connected')
+    if nx.cycle_basis(G):
+        raise Exception('the graph has a cycle')
+
+
+###############################################################################
 # Extra functions of possibly general interest.
 
 def random_category(distn):
@@ -117,6 +132,7 @@ def decompose_rates(Q):
             P[i, i] = 0
             P[i] /= rate
     return rates, P
+
 
 
 #FIXME: add testing
