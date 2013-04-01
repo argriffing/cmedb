@@ -114,3 +114,14 @@ endpoint-conditioned expectations from a time-reversible rate matrix:
     CREATE TABLE wait (initial integer, final integer, state integer, wait real, primary key (initial, final, state));
     sqlite> 
 
+an alignment sampled at nodes related by an unrooted tree,
+using a time-reversible continuous Markov process:
+
+    $ sqlite3 sampled.alignment.db 
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE alignment (offset integer, taxon integer, state integer, primary key (offset, taxon));
+    sqlite> 
+
