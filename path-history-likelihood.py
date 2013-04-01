@@ -1,12 +1,7 @@
 """
-Estimate a likelihood from sampled histories.
+Estimate a likelihood from sampled path histories.
 
 This script should not compute the expm directly.
-Input schema.
-table wait
-initial integer, final integer, state integer, wait real
-table usage
-initial integer, final integer, source integer, sink integer, usage real
 """
 
 import argparse
@@ -108,7 +103,7 @@ def main(args):
     conn.close()
 
     # read the path histories from the sqlite3 database file
-    conn = sqlite3.connect(args.histories)
+    conn = sqlite3.connect(args.path_histories)
     cursor = conn.cursor()
     cursor.execute('select history, segment, state, blen from histories')
     data = sorted(cursor)
@@ -133,7 +128,6 @@ def main(args):
             histories.append(segment)
             segment = []
         if history_index != len(histories):
-            print row
             raise Exception('invalid history index')
         if segment_index != len(segment):
             raise Exception('invalid segment index')
@@ -197,7 +191,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rates', default='rate.matrix.db',
             help='time-reversible rate matrix as an sqlite3 database file')
-    parser.add_argument('--histories', default='histories.db',
+    parser.add_argument('--path-histories', default='path.histories.db',
             help='input path histories as an sqlite3 database file')
     parser.add_argument('--outfile', default='averages.db',
             help='output averages as an sqlite3 database file')

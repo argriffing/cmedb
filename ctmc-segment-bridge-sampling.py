@@ -466,7 +466,7 @@ if __name__ == '__main__':
             help='input rate matrix as an sqlite3 database file')
     parser.add_argument('--nsamples', type=cmedbutil.pos_int, default=4,
             help='sample this many endpoint-conditioned histories')
-    parser.add_argument('--outfile', default='histories.db',
+    parser.add_argument('--outfile', default='path.histories.db',
             help='output path samples as an sqlite3 database file')
     parser.add_argument('--table',
             help='name of table to create in the new database')
