@@ -12,7 +12,8 @@ so use the Hobolth and Stone 2009 paper instead.
 """
 
 #XXX implement more path sampling methods
-#XXX document the database formats
+# * uniformization
+# * ctmc uniformization
 
 import functools
 import argparse
@@ -26,43 +27,6 @@ import scipy.optimize
 
 import cmedbutil
 
-
-#XXX this is copypasted
-def random_category(distn):
-    """
-    Sample from a categorical distribution.
-    Note that this is not the same as random.choice(distn).
-    Maybe a function like this will eventually appear
-    in python or numpy or scipy.
-    @param distn: categorical distribution as a stochastic vector
-    @return: category index as a python integer
-    """
-    nstates = len(distn)
-    np_index = np.dot(np.arange(nstates), np.random.multinomial(1, distn))
-    return int(np_index)
-
-#XXX this is copypasted
-def decompose_rates(Q):
-    """
-    Break a rate matrix into two parts.
-    The first part consists of the rates away from each state;
-    this information is contained in the diagonal of the rate matrix.
-    The second part consists of a transition matrix
-    that defines the distribution over sink states conditional
-    on an instantaneous change away from a given source state.
-    Note that this function never requires expm of Q.
-    Also, P preserves the sparsity pattern of Q.
-    @param Q: rate matrix
-    @return: rates, P
-    """
-    nstates = len(Q)
-    rates = -np.diag(Q)
-    P = np.array(Q)
-    for i, rate in enumerate(rates):
-        if rate:
-            P[i, i] = 0
-            P[i] /= rate
-    return rates, P
 
 #XXX this is copypasted
 def gen_branch_history_sample(state_in, blen_in, rates, P, t0=0.0):
@@ -90,7 +54,7 @@ def gen_branch_history_sample(state_in, blen_in, rates, P, t0=0.0):
         if t >= blen_in:
             return
         distn = P[state]
-        state = random_category(distn)
+        state = cmedbutil.random_category(distn)
         yield t, state
 
 def gen_modified_branch_history_sample(
@@ -121,7 +85,7 @@ def gen_modified_branch_history_sample(
         if t >= blen_in:
             return
         distn = P[state]
-        state = random_category(distn)
+        state = cmedbutil.random_category(distn)
         yield t, state
     for t, state in gen_branch_history_sample(state, blen_in, rates, P, t0=t):
         yield t, state
@@ -296,7 +260,7 @@ def gen_direct_sample(
         change_distn = np.array(distn)
         change_distn[state] = 0
         change_distn /= np.sum(change_distn)
-        next_state = random_category(change_distn)
+        next_state = cmedbutil.random_category(change_distn)
         #
         # use root-finding to get the waiting time
         #
@@ -432,7 +396,7 @@ def main(args):
     Q = pre_Q - np.diag(np.sum(pre_Q, axis=1))
 
     # do a conversion for rejection sampling
-    rates, P = decompose_rates(Q)
+    rates, P = cmedbutil.decompose_rates(Q)
 
     # partially evaluate the rejection sampling function
     if args.method == 'naive-rejection':

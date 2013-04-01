@@ -24,41 +24,6 @@ import networkx as nx
 
 import cmedbutil
 
-def random_category(distn):
-    """
-    Sample from a categorical distribution.
-    Note that this is not the same as random.choice(distn).
-    Maybe a function like this will eventually appear
-    in python or numpy or scipy.
-    @param distn: categorical distribution as a stochastic vector
-    @return: category index as a python integer
-    """
-    nstates = len(distn)
-    np_index = np.dot(np.arange(nstates), np.random.multinomial(1, distn))
-    return int(np_index)
-
-def decompose_rates(Q):
-    """
-    Break a rate matrix into two parts.
-    The first part consists of the rates away from each state;
-    this information is contained in the diagonal of the rate matrix.
-    The second part consists of a transition matrix
-    that defines the distribution over sink states conditional
-    on an instantaneous change away from a given source state.
-    Note that this function never requires expm of Q.
-    Also, P preserves the sparsity pattern of Q.
-    @param Q: rate matrix
-    @return: rates, P
-    """
-    nstates = len(Q)
-    rates = -np.diag(Q)
-    P = np.array(Q)
-    for i, rate in enumerate(rates):
-        if rate:
-            P[i, i] = 0
-            P[i] /= rate
-    return rates, P
-
 def gen_branch_history_sample(state_in, blen_in, rates, P):
     """
     Path sampling along a branch with a known initial state.
@@ -83,7 +48,7 @@ def gen_branch_history_sample(state_in, blen_in, rates, P):
         if blen_accum >= blen_in:
             return
         distn = P[state]
-        state = random_category(distn)
+        state = cmedbutil.random_category(distn)
         yield blen_accum, state
 
 
@@ -103,7 +68,7 @@ def sample_history(root, G_dag_in, distn, rates, P):
     if P.shape != (nstates, nstates):
         raise Exception('nstates mismatch')
     # Sample the initial state from the distribution.
-    root_state = random_category(distn)
+    root_state = cmedbutil.random_category(distn)
     # Initialize the root state.
     vertex_to_state = {root : root_state}
     # Note that the subset of vertices that are shared with the
@@ -313,7 +278,7 @@ def main(args):
         G_dag[a][b]['blen'] = G[a][b]['blen']
 
     # sample the unconditional history or histories
-    rates, P = decompose_rates(Q)
+    rates, P = cmedbutil.decompose_rates(Q)
     conn = sqlite3.connect(args.outfile)
     if args.nsamples == 1:
         build_single_history_table(

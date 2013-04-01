@@ -47,7 +47,7 @@ def pos_float(x):
 
 
 ###############################################################################
-# Functions related to stochastic processes.
+# Validation of invariants related to stochastic processes.
 
 def assert_stochastic_vector(v):
     if np.any(v < 0) or np.any(1 < v):
@@ -75,4 +75,49 @@ def assert_detailed_balance(Q, distn):
     if not np.allclose(S, S.T):
         raise Exception('the detailed balance equations are not met')
 
+
+###############################################################################
+# Extra functions of possibly general interest.
+
+def random_category(distn):
+    """
+    Sample from a categorical distribution.
+    Note that this is not the same as random.choice(distn).
+    Maybe a function like this will eventually appear
+    in python or numpy or scipy.
+    @param distn: categorical distribution as a stochastic vector
+    @return: category index as a python integer
+    """
+    nstates = len(distn)
+    np_index = np.dot(np.arange(nstates), np.random.multinomial(1, distn))
+    return int(np_index)
+
+
+###############################################################################
+# Functions specific to continuous time Markov processes.
+
+def decompose_rates(Q):
+    """
+    Break a rate matrix into two parts.
+    The first part consists of the rates away from each state;
+    this information is contained in the diagonal of the rate matrix.
+    The second part consists of a transition matrix
+    that defines the distribution over sink states conditional
+    on an instantaneous change away from a given source state.
+    Note that this function never requires expm of Q.
+    Also, P preserves the sparsity pattern of Q.
+    @param Q: rate matrix
+    @return: rates, P
+    """
+    nstates = len(Q)
+    rates = -np.diag(Q)
+    P = np.array(Q)
+    for i, rate in enumerate(rates):
+        if rate:
+            P[i, i] = 0
+            P[i] /= rate
+    return rates, P
+
+
 #FIXME: add testing
+
