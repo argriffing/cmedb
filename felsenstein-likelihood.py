@@ -19,8 +19,6 @@ import networkx as nx
 
 import cmedbutil
 
-#XXX XXX this script will depend on an alignment -> patterns preprocessing step
-
 
 #TODO allow a root and a non-reversible rate matrix
 
@@ -36,8 +34,6 @@ def _ll_helper(
         ):
     """
     This is purely a helper function.
-    It should not be called outside of its own module.
-    The P matrices and the root prior may be algopy objects.
     @param ov: ordered vertices with child vertices before parent vertices
     @param v_to_children: map from a vertex to a sequence of child vertices
     @param de_to_P: map from a directed edge to a transition matrix
@@ -48,13 +44,23 @@ def _ll_helper(
     @return: log likelihood
     """
     npatterns = patterns.shape[0]
-    lls = algopy.zeros(
+    lls = np.zeros(
             npatterns,
             dtype=de_to_P.values()[0],
             )
     for i in range(npatterns):
         lls[i] = fn(ov, v_to_children, patterns[i], de_to_P, root_prior)
-    return algopy.dot(lls, pat_mults)
+    return np.dot(lls, pat_mults)
+
+
+
+#FIXME it is annoying that 'pattern' is expected to be an array
+# indexed by vertex values.
+# If it were a dictionary then the vertex values would not be
+# as restricted.
+# The principle is that we can use more-structured formats
+# for the sqlite3 i/o and use less-structured formats
+# internally in these python scripts.
 
 
 #XXX copypasted from slowedml/sitell
@@ -95,7 +101,7 @@ def brute_log_likelihood(ov, v_to_children, pattern, de_to_P, root_prior):
         likelihood += root_prior[augmented_pattern[root]] * edge_prob
 
     # Return the log likelihood.
-    return algopy.log(likelihood)
+    return np.log(likelihood)
 
 
 #XXX copypasted from slowedml/sitell
@@ -136,21 +142,41 @@ def felsenstein_log_likelihood(ov, v_to_children, pattern, de_to_P, root_prior):
     return np.log(np.dot(root_prior, likelihoods[root]))
 
 
-
-def get_leaf_alignment(cursor):
+def get_leaf_alignment_pattern_info(cursor):
     """
-    Extract a leaf state alignment from an sqlite3 database cursor.
+    Extract leaf alignment pattern info from an sqlite3 database cursor.
+    Return a list of pairs.
+    The first thing in each pair is a list of (taxon, state) pairs.
+    The second thing in each pair is a pattern multiplicity.
     @param cursor: database cursor
-    @return: sequence of maps from taxon to state
+    @return: pattern info
     """
+
+    # read the pattern indices
+    cursor.execute(
+        'select pattern from multiplicities '
+        'union '
+        'select pattern from patterns '
+        'order by pattern')
+    pattern_indices = [t[0] for t in cursor]
+
+    # read the pattern multiplicities from the database cursor
+    t = 'select pattern, multiplicity from multiplicities'
+    pattern_to_multiplicity = dict(cursor.execute(t))
 
     # read the data from the database cursor
-    cursor.execute('select offset, taxon, state from alignment')
-    offset_to_pairs = defaultdict(list)
-    for offset, taxon, state in cursor:
-        offset_to_pairs[offset].append((taxon, state))
-    assignments = [dict(pairs) for pairs in offset_to_pairs.values()]
-    return assignments
+    pattern_to_pairs = defaultdict(list)
+    cursor.execute('select pattern, taxon, state from patterns')
+    for pattern_index, taxon, state in cursor:
+        pattern_to_pairs[pattern_index].append((taxon, state))
+
+    # return a list of patterns with multiplicity
+    pattern_info = []
+    for p in pattern_indices:
+        pairs = pattern_to_pairs[p]
+        multiplicity = pattern_to_multiplicity[p]
+        pattern_info.append((pairs, mutliplicity))
+    return pattern_info
 
 
 #XXX copypasted
@@ -269,21 +295,68 @@ def main(args):
     for a, b in G_dag.edges():
         G_dag[a][b]['blen'] = G[a][b]['blen']
 
-    # Read the leaf alignment from the database.
+    # Read the leaf alignment patterns from the database.
     conn = sqlite3.connect(args.leaf_alignment)
     cursor = conn.cursor()
-    assignments = get_leaf_alignment(cursor)
+    pattern_info = get_leaf_alignment_pattern_info(cursor)
     conn.close()
+
+    # Define the taxon vertices in preparation for tree traversal.
+    vertices = list(G_dag)
+
+    # Construct args for the likelihood calculation.
+    ov = list(networkx.dfs_postorder_nodes(G_dag))
+    v_to_children = dict((v, G_dag[v].successors()) for v in G_dag)
+    de_to_P = {}
+    for va in vertices:
+        for vb in G_dag[va].successors():
+            de = (va, vb)
+            blen = G_dag[va][vb]['blen']
+            P = scipy.linalg.expm(blen * Q)
+            de_to_P[de] = P
+    root_prior = distn
+    patterns = pass
+
+    # Get the rate matrix expm for the various branches.
+    def _ll_helper(
+            ov, v_to_children, de_to_P, root_prior,
+            patterns, pat_mults,
+            fn,
+            ):
+        """
+        @param ov: ordered vertices with child vertices before parent vertices
+        @param v_to_children: map from a vertex to a sequence of child vertices
+        @param de_to_P: map from a directed edge to a transition matrix
+        @param root_prior: equilibrium distribution at the root
+        @param patterns: each pattern assigns a state to each leaf
+        @param pat_mults: a multiplicity for each pattern
+        @param fn: a per-pattern log likelihood evaluation function
+        @return: log likelihood
+        """
+        pass
+
 
 
 if __name__ == '__main__':
+
+    # define the foo choices
+    method_choices = (
+            'brute',
+            'felsenstein',
+            )
+
+    # define command line options
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tree', default='brown.tree.db',
             help='unrooted tree as an sqlite3 database file')
     parser.add_argument('--rates', default='rate.matrix.db',
             help=('continuous-time Markov substitution process '
                 'as an sqlite3 database file'))
-    parser.add_argument('--leaf-alignment', default='leaf.alignment.db',
+    parser.add_argument('--leaf-patterns', default='patterns.db',
             help='aligned states at the leaves of the tree')
+    parser.add_argument('--method', choices=method_choices,
+            default='felsenstein',
+            help=('use either brute force or felsenstein '
+                'likelihood calculation'))
     main(parser.parse_args())
 
