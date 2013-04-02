@@ -12,10 +12,12 @@ maybe an average log likelhood.
 
 import argparse
 import sqlite3
+import itertools
 from collections import defaultdict
 
 import numpy as np
 import networkx as nx
+import scipy.linalg
 
 import cmedbutil
 
@@ -44,10 +46,7 @@ def _ll_helper(
     @return: log likelihood
     """
     npatterns = patterns.shape[0]
-    lls = np.zeros(
-            npatterns,
-            dtype=de_to_P.values()[0],
-            )
+    lls = np.zeros(npatterns, dtype=float)
     for i in range(npatterns):
         lls[i] = fn(ov, v_to_children, patterns[i], de_to_P, root_prior)
     return np.dot(lls, pat_mults)
@@ -121,10 +120,7 @@ def felsenstein_log_likelihood(ov, v_to_children, pattern, de_to_P, root_prior):
     root = ov[-1]
 
     # Initialize the map from vertices to subtree likelihoods.
-    likelihoods = np.ones(
-            (nvertices, nstates),
-            dtype=de_to_P.values()[0],
-            )
+    likelihoods = np.ones((nvertices, nstates), dtype=float)
 
     # Compute the subtree likelihoods using dynamic programming.
     for v in ov:
@@ -145,11 +141,8 @@ def felsenstein_log_likelihood(ov, v_to_children, pattern, de_to_P, root_prior):
 def get_leaf_alignment_pattern_info(cursor):
     """
     Extract leaf alignment pattern info from an sqlite3 database cursor.
-    Return a list of pairs.
-    The first thing in each pair is a list of (taxon, state) pairs.
-    The second thing in each pair is a pattern multiplicity.
     @param cursor: database cursor
-    @return: pattern info
+    @return: (taxon, state) pairs, multiplicities
     """
 
     # read the pattern indices
@@ -171,12 +164,12 @@ def get_leaf_alignment_pattern_info(cursor):
         pattern_to_pairs[pattern_index].append((taxon, state))
 
     # return a list of patterns with multiplicity
-    pattern_info = []
+    patterns = []
+    multiplicities = []
     for p in pattern_indices:
-        pairs = pattern_to_pairs[p]
-        multiplicity = pattern_to_multiplicity[p]
-        pattern_info.append((pairs, mutliplicity))
-    return pattern_info
+        patterns.append(pattern_to_pairs[p])
+        multiplicities.append(pattern_to_multiplicity[p])
+    return patterns, multiplicities
 
 
 #XXX copypasted
@@ -296,44 +289,51 @@ def main(args):
         G_dag[a][b]['blen'] = G[a][b]['blen']
 
     # Read the leaf alignment patterns from the database.
-    conn = sqlite3.connect(args.leaf_alignment)
+    conn = sqlite3.connect(args.leaf_patterns)
     cursor = conn.cursor()
-    pattern_info = get_leaf_alignment_pattern_info(cursor)
+    pairs_list, multiplicities = get_leaf_alignment_pattern_info(cursor)
     conn.close()
 
-    # Define the taxon vertices in preparation for tree traversal.
-    vertices = list(G_dag)
+    # Define an ordering of the taxa.
+    taxa = sorted(G_dag)
+    ntaxa = len(taxa)
+    taxon_to_i = dict((taxon, i) for i, taxon in enumerate(taxa))
+
+    # Count the number of distinct patterns.
+    npatterns = len(multiplicities)
 
     # Construct args for the likelihood calculation.
-    ov = list(networkx.dfs_postorder_nodes(G_dag))
-    v_to_children = dict((v, G_dag[v].successors()) for v in G_dag)
+    ov = list(nx.dfs_postorder_nodes(G_dag))
+    v_to_children = dict((v, G_dag.successors(v)) for v in G_dag)
     de_to_P = {}
-    for va in vertices:
-        for vb in G_dag[va].successors():
+    for va in taxa:
+        for vb in G_dag.successors(va):
             de = (va, vb)
             blen = G_dag[va][vb]['blen']
             P = scipy.linalg.expm(blen * Q)
             de_to_P[de] = P
     root_prior = distn
-    patterns = pass
+    patterns = -np.ones((npatterns, ntaxa), dtype=int)
+    pat_mults = np.array(multiplicities)
+    for pattern_index, pairs in enumerate(pairs_list):
+        for taxon, state in pairs:
+            taxon_index = taxon_to_i[taxon]
+            patterns[pattern_index, taxon_index] = state
+    if args.method == 'brute':
+        fn = brute_log_likelihood
+    elif args.method == 'felsenstein':
+        fn = felsenstein_log_likelihood
+    else:
+        raise Exception('unrecognized likelihood method')
 
-    # Get the rate matrix expm for the various branches.
-    def _ll_helper(
+    # Compute the log likelihood for the patterns.
+    ll = _ll_helper(
             ov, v_to_children, de_to_P, root_prior,
             patterns, pat_mults,
             fn,
-            ):
-        """
-        @param ov: ordered vertices with child vertices before parent vertices
-        @param v_to_children: map from a vertex to a sequence of child vertices
-        @param de_to_P: map from a directed edge to a transition matrix
-        @param root_prior: equilibrium distribution at the root
-        @param patterns: each pattern assigns a state to each leaf
-        @param pat_mults: a multiplicity for each pattern
-        @param fn: a per-pattern log likelihood evaluation function
-        @return: log likelihood
-        """
-        pass
+            )
+
+    print ll
 
 
 
