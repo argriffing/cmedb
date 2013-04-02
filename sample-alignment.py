@@ -106,13 +106,15 @@ def sample_history(root, G_dag_in, distn, rates, P):
 
 #XXX copypasted and modified
 def build_alignment_table(
-        alignment_length, conn, root, G_dag, distn, states, rates, P):
+        alignment_length, only_leaves,
+        conn, root, G_dag, distn, states, rates, P):
     """
     Do unconditional forward sampling of an alignment at vertices of a tree.
     This is not conditional on the states at the leaves of the tree.
     It also does not use expm.
     This script throws out the transition histories along branches.
     @param alignment_length: sample this many columns of the alignment
+    @param only_leaves: True if we only want to sample leaf states
     @param conn: database connection
     @param root: the arbitrary root of the directed acyclic graph
     @param G_dag: networkx directed acyclic graph
@@ -151,6 +153,10 @@ def build_alignment_table(
 
             # get edges adjacent to the vertex
             edges = [G_segmented[v][n] for n in G_segmented.neighbors(v)]
+
+            # bail if we are at an internal vertex and we only want leaves
+            if only_leaves and len(edges) > 1:
+                continue
 
             # check that all of the edges have the same state
             uniqued_states = list(set(edge['state'] for edge in edges))
@@ -286,7 +292,8 @@ def main(args):
     # sample the unconditional columns of the alignment
     conn = sqlite3.connect(args.outfile)
     build_alignment_table(
-            args.length, conn, root, G_dag, distn, states, rates, P)
+            args.length, args.only_leaves,
+            conn, root, G_dag, distn, states, rates, P)
     conn.close()
 
 
@@ -299,6 +306,10 @@ if __name__ == '__main__':
                 'as an sqlite3 database file'))
     parser.add_argument('--length', type=cmedbutil.pos_int, default=10,
             help='sequence length')
+    parser.add_argument('--only-leaves', action='store_true',
+            help=('include only leaf states '
+                'and do not include the states '
+                'at the internal nodes of the tree'))
     parser.add_argument('-o', '--outfile', default='sampled.alignment.db',
             help='create this sqlite3 database file')
     main(parser.parse_args())
