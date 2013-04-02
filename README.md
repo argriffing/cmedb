@@ -125,3 +125,14 @@ using a time-reversible continuous Markov process:
     CREATE TABLE alignment (offset integer, taxon integer, state integer, primary key (offset, taxon));
     sqlite> 
 
+site patterns, with multiplicities, extracted from an alignment:
+
+    $ sqlite3 patterns.db 
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE multiplicities (pattern integer, multiplicity integer, primary key (pattern));
+    CREATE TABLE patterns (pattern integer, taxon integer, state integer, primary key (pattern, taxon));
+    sqlite> 
+
