@@ -260,7 +260,6 @@ def get_unrooted_tree(cursor):
 
 def main(args):
 
-    #XXX backport this into the sample-unconditional-history script
     # read and validate the rate matrix info from the sqlite3 database file
     conn = sqlite3.connect(args.rates)
     cursor = conn.cursor()
@@ -270,7 +269,6 @@ def main(args):
     # Get a more convenient form of the rate matrix for forward simulation.
     rates, P = cmedbutil.decompose_rates(Q)
 
-    #XXX backport this into the sample-unconditional-history script
     # extract the unrooted tree from the tree db file
     conn = sqlite3.connect(args.tree)
     cursor = conn.cursor()
