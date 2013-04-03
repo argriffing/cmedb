@@ -14,6 +14,12 @@ import scipy.stats
 
 import cmedbutil
 
+#XXX this script is funky right now and should be split into multiple scripts.
+# * a script that computes joint (data, history) density from a single history
+# * a script that estimates likelihood ratio given
+#   multiple histories and the reference process and a candidate
+#   process rate matrix.
+
 
 #XXX this is copypasted
 def decompose_rates(Q):
@@ -134,17 +140,30 @@ def main(args):
         segment.append((state, blen))
     histories.append(segment)
 
-    # compute the likelihood for each path history
+    # Compute the likelihood for each path history.
     likelihoods = []
     for history in histories:
         likelihood = get_conditional_likelihood_from_history(
                 Q, rates, P, states, history)
         likelihoods.append(likelihood)
 
+    # Compute the probability of the final state
+    # conditional on the initial state and the history
+    # for each path history.
+    conditional_likelihoods = []
+    for history in histories:
+        likelihood = get_conditional_final(
+                Q, rates, P, states, history)
+        conditional_likelihoods.append(likelihood)
+
     # report likelihood summary
-    print 'likelihood arithmetic mean:', np.mean(likelihoods)
-    print 'likelihood geometric mean:', scipy.stats.gmean(likelihoods)
-    print 'likelihood harmonic mean:', scipy.stats.hmean(likelihoods)
+    #print 'likelihood arithmetic mean:', np.mean(likelihoods)
+    #print 'likelihood geometric mean:', scipy.stats.gmean(likelihoods)
+    #print 'likelihood harmonic mean:', scipy.stats.hmean(likelihoods)
+    #print
+    print 'expected probability of final point'
+    print 'conditional on the history and the initial point:'
+    print np.mean(conditional_likelihoods)
     print
 
 
@@ -187,13 +206,39 @@ def get_conditional_likelihood_from_history(Q, rates, P, states, history):
     return likelihood
 
 
+def get_conditional_final(Q, rates, P, states, history):
+    """
+    Each history is a sample path.
+    Each sample path is a sequence of (state, wait) pairs.
+    Return the likelihood conditional on the initial state.
+    @param Q: rate matrix
+    @param rates: rate away from each state
+    @param P: instantaneous transition probability distributions
+    @param states: ordered states
+    @param history: a single sample path
+    @return: likelihood conditional on initial state
+    """
+
+    # FIXME: eventually do log likelihood instead
+
+    # Precompute the map from states to state indices.
+    s_to_i = dict((s, i) for i, s in enumerate(states))
+
+    # Return the conditional likelihood.
+    if len(history) == 1:
+        return 1.0
+    else:
+        (state_a, wait_a), (state_b, wait_b) = history[-2:]
+        i = s_to_i[state_a]
+        j = s_to_i[state_b]
+        return P[i, j]
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rates', default='rate.matrix.db',
             help='time-reversible rate matrix as an sqlite3 database file')
     parser.add_argument('--path-histories', default='path.histories.db',
             help='input path histories as an sqlite3 database file')
-    parser.add_argument('--outfile', default='averages.db',
-            help='output averages as an sqlite3 database file')
     main(parser.parse_args())
 

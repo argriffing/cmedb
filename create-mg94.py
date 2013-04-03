@@ -1,23 +1,48 @@
 """
-This script creates a nucleotide rate matrix in sqlite3 format.
+This script creates a time-reversible codon rate matrix in sqlite3 format.
+
+The rate matrix is from Muse-Gaut (1994).
+The output rate matrix is scaled to one expected substitution per time unit.
+Genetic states corresponding to stop codons are not included
+in the output equilibrium distribution or in the output rate matrix.
 """
 
 import argparse
 import sqlite3
 
 import numpy as np
+import scipy.linalg
 
 import cmedbutil
 
 
+#XXX unfinished
+
+def get_MG_pre_Q(
+        ts, tv, syn, nonsyn, asym_compo,
+        nt_distn,
+        kappa, omega,
+        ):
+    """
+    This model is nested in FMutSel-F from which this code was copypasted.
+    It was found in slowedml/codon1994.py
+    """
+    if nt_distn.shape != (4,):
+        raise Exception(nt_distn.shape)
+    A = (omega * nonsyn + syn) * (kappa * ts + tv)
+    B = np.dot(asym_compo, nt_distn)
+    pre_Q = A * B
+    return pre_Q
+
+
 def main(args):
 
-    # check the command line arguments
-    distn = np.array([args.A, args.C, args.G, args.T])
-    cmedbutil.assert_stochastic_vector(distn)
+    # construct and validate the mutational process equilibrium distribution
+    ntdistn = np.array([args.A, args.C, args.G, args.T])
+    cmedbutil.assert_stochastic_vector(ntdistn)
 
-    # create or open the database for output
-    conn = sqlite3.connect('rate.matrix.db')
+    # create or open the rate matrix database for writing
+    conn = sqlite3.connect(args.outfile)
     cursor = conn.cursor()
 
     # create the tables
@@ -36,7 +61,7 @@ def main(args):
     conn.commit()
 
     # define the nucleotide states
-    states = 'ACGT'
+    nt_states = 'ACGT'
 
     # populate the rate matrix table
     for i, si in enumerate(states):
@@ -71,14 +96,22 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-A', default=0.25, type=cmedbutil.pos_float,
-            help='equilibrium probability of nucleotide A')
+            help='mutational equilibrium probability of nucleotide A')
     parser.add_argument('-C', default=0.25, type=cmedbutil.pos_float,
-            help='equilibrium probability of nucleotide C')
+            help='mutational equilibrium probability of nucleotide C')
     parser.add_argument('-G', default=0.25, type=cmedbutil.pos_float,
-            help='equilibrium probability of nucleotide G')
+            help='mutational equilibrium probability of nucleotide G')
     parser.add_argument('-T', default=0.25, type=cmedbutil.pos_float,
-            help='equilibrium probability of nucleotide T')
-    parser.add_argument('-k', '--kappa', default=2.0, type=cmedbutil.pos_float,
+            help='mutational equilibrium probability of nucleotide T')
+    parser.add_argument('-k', '--kappa', default=2.0, 
+            type=cmedbutil.pos_float,
             help='transition/transversion ratio')
+    parser.add_argument('-w', '--omega', default=0.05,
+            type=cmedbutil.pos_float,
+            help='nonsynonymous/synonymous ratio')
+    parser.add_argument('--code', default='universal.code.db',
+            help='input genetic code in sqlite3 format')
+    parser.add_argument('--outfile', default='rate.matrix.db',
+            help='output rate matrix in sqlite3 format')
     main(parser.parse_args())
 

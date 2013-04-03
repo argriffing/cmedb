@@ -161,7 +161,7 @@ def get_summary_from_history(states, history):
     # Get the wait time expectations from the sampled paths.
     wait_times = np.zeros(n, dtype=float)
     for state, wait in history:
-        i = s_to_i[state_a]
+        i = s_to_i[state]
         wait_times[i] += wait
 
     # Count the number of each transition along the path.

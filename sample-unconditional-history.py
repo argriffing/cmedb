@@ -190,20 +190,14 @@ def build_multiple_histories_table(
             cursor.execute(s, t)
         conn.commit()
 
-def main(args):
+#XXX copypasted
+def get_rate_matrix_info(cursor):
+    """
+    @param cursor: sqlite3 database cursor
+    @return: sorted state list, stationary distribution, dense rate matrix
+    """
 
-    # define the number of histories to sample
-    nsamples = args.nsamples
-
-    # validate table name
-    if not args.table.isalnum():
-        raise Exception('table name must be alphanumeric')
-
-    # open the rate matrix db file
-    # read the rates
-    # read the state distribution at the root
-    conn = sqlite3.connect(args.rates)
-    cursor = conn.cursor()
+    # get the sorted list of all states
     cursor.execute(
             'select state from distn '
             'union '
@@ -213,51 +207,57 @@ def main(args):
             'union '
             'select state from states '
             )
-    states = [t[0] for t in cursor]
+    states = sorted(t[0] for t in cursor)
+
+    # count the states
     nstates = len(states)
+
     # define the map from state to rate matrix index
     s_to_i = dict((s, i) for i, s in enumerate(states))
+
     # construct the rate matrix
     cursor.execute('select source, sink, rate from rates')
     pre_Q = np.zeros((nstates, nstates), dtype=float)
     for si, sj, rate in cursor:
         pre_Q[s_to_i[si], s_to_i[sj]] = rate
     Q = pre_Q - np.diag(np.sum(pre_Q, axis=1))
+
     # construct the distribution of states at the root
     cursor.execute('select state, prob from distn')
     state_prob_pairs = list(cursor)
     distn = np.zeros(nstates)
     for state, prob in state_prob_pairs:
         distn[s_to_i[state]] = prob
-    conn.close()
 
-    # open the tree db file
+    # assert that the distribution has the right form
+    cmedbutil.assert_stochastic_vector(distn)
+
+    # assert that the rate matrix is actually a rate matrix
+    cmedbutil.assert_rate_matrix(Q)
+
+    # assert that the distribution is at equilibrium w.r.t. the rate matrix
+    cmedbutil.assert_equilibrium(Q, distn)
+
+    # assert that the detailed balance equations are met
+    cmedbutil.assert_detailed_balance(Q, distn)
+
+    # return the validated inputs describing the stochastic process
+    return states, distn, Q
+
+
+#XXX copypasted
+def get_unrooted_tree(cursor):
+    """
+    Extract an unrooted tree from an sqlite3 database connection.
+    @return: undirected networkx graph with blen edge attributes
+    """
+
     # read the association of node index pairs to edge indices
     # read the association of edge indices to branch lengths
-    conn = sqlite3.connect(args.tree)
-    cursor = conn.cursor()
-    cursor.execute(
-            'select va from topo '
-            'union '
-            'select vb from topo '
-            )
-    vertices = [t[0] for t in cursor]
-    nvertices = len(vertices)
     cursor.execute('select edge, va, vb from topo')
-    edge_va_vb_list = list(cursor)
+    edge_va_vb_list = sorted(cursor)
     cursor.execute('select edge, blen from blen')
     edge_to_blen = dict(cursor)
-    conn.close()
-
-    # define the root node index for sampling;
-    # the root is either user supplied,
-    # or is taken to be the smallest node index otherwise
-    if args.root is None:
-        root = vertices[0]
-    elif args.root in vertices:
-        root = args.root
-    else:
-        raise Exception('the specified root should be a node index in the tree')
 
     # build an undirected graph from the tree info
     G = nx.Graph()
@@ -265,10 +265,44 @@ def main(args):
         G.add_edge(va, vb, blen=edge_to_blen[edge])
 
     # check that the graph is connected and has no cycles
-    if not nx.is_connected(G):
-        raise Exception('the tree is not connected')
-    if nx.cycle_basis(G):
-        raise Exception('the tree has a cycle')
+    cmedbutil.assert_connected_acyclic_graph(G)
+
+    # return the graph
+    return G
+
+
+
+def main(args):
+
+    # define the number of histories to sample
+    nsamples = args.nsamples
+
+    # validate table name
+    if not args.table.isalnum():
+        raise Exception('table name must be alphanumeric')
+
+    # read and validate the rate matrix info from the sqlite3 database file
+    conn = sqlite3.connect(args.rates)
+    cursor = conn.cursor()
+    states, distn, Q = get_rate_matrix_info(cursor)
+    conn.close()
+
+    # open the tree db file
+    conn = sqlite3.connect(args.tree)
+    cursor = conn.cursor()
+    G = get_unrooted_tree(cursor)
+    conn.close()
+
+    # define the root node index for sampling;
+    # the root is either user supplied,
+    # or is taken to be the smallest node index otherwise
+    vertices = sorted(G)
+    if args.root is None:
+        root = vertices[0]
+    elif args.root in vertices:
+        root = args.root
+    else:
+        raise Exception('the specified root should be a node index in the tree')
 
     # Build a directed breadth first tree starting at the distinguished vertex.
     # Note that the tree built by nx.bfs_tree and the edges yielded
@@ -292,18 +326,18 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--tree', required=True,
+    parser.add_argument('--tree', default='brown.tree.db',
             help='unrooted tree as an sqlite3 database file')
-    parser.add_argument('--rates', required=True,
+    parser.add_argument('--rates', default='rate.matrix.db',
             help=('continuous-time Markov substitution process '
                 'as an sqlite3 database file'))
     parser.add_argument('--root', type=int,
             help='root node index')
     parser.add_argument('--nsamples', type=cmedbutil.pos_int, default=5,
             help='sample this many histories')
-    parser.add_argument('-o', '--outfile', required=True,
+    parser.add_argument('-o', '--outfile', default='sampled.histories.db',
             help='create this sqlite3 database file')
-    parser.add_argument('--table', required=True,
+    parser.add_argument('--table', default='histories',
             help='name of table to create in the new database')
     main(parser.parse_args())
 
