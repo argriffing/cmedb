@@ -24,6 +24,12 @@ but no information about the blink states inside of the path
 is directly observable.
 """
 
+#FIXME redo this to not use numpy,
+# and to more flexibly support sparse rate matrices
+# without worrying about extra conversions between states
+# and indices into ndarrays.
+# This will mean not using the usual rate matrix reader.
+
 import argparse
 import sqlite3
 
@@ -33,9 +39,8 @@ import cmedbutil
 
 
 # XXX under construction
-# break the input state arg into two args for primary vs. blinking states
 def gen_branch_history_sample(
-        compound_state_in, blen_in,
+        primary_state_in, blink_states_in, blen_in,
         primary_Q,
         partition, on_rate, off_rate,
         ):
@@ -49,17 +54,27 @@ def gen_branch_history_sample(
     without regard to blinking.
     The third group defines the partition of the primary state space
     and the toggling rates of the modulating blinking processes.
-    @param compound_state_in: initial state 
+    @param primary_state_in: initial integer state of the observable process
+    @param blink_state_in: initial binary tuple state of the blinking process
     @param blen_in: length of the branch
     @param primary_Q: primary process rate matrix without regard to blinking
-    @param partition: maps a primary state to a partition index
+    @param partition: maps a primary state to a partition index for blinking
     @param on_rate: instantaneous off-to-on blinking rate
     @param off_rate: instantaneous on-to-off blinking rate
     """
-    state = state_in
-    nstates = len(rates)
+    #XXX the docstring is up to date but the implmenetation is not
+    primary_state = primary_state_in
+    blink_state = tuple(blink_state_in)
     blen_accum = 0
     while True:
+
+        # Compute the total rate out of the compound state.
+        # This is the sum of allowed primary transition rates
+        # and allowed blink toggle rates.
+        total_primary_rate = 0.0
+        for j in primary_Q:
+            pass
+
         rate = rates[state]
         scale = 1 / rate
         b = np.random.exponential(scale=scale)
@@ -71,7 +86,7 @@ def gen_branch_history_sample(
         yield blen_accum, state
 
 
-# XXX this might need to be changed
+# XXX this needs to be changed or deleted
 def sample_history(root, G_dag_in, distn, rates, P):
     """
     Sample state history on a rooted tree.
