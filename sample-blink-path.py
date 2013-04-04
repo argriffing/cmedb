@@ -103,7 +103,6 @@ def get_moves(compound_state, dg, partition, on_rate, off_rate):
     return move_rate_pairs
 
 
-# XXX under construction
 def gen_branch_history_sample(
         primary_state_in, blink_state_in, blen_in,
         dg,
@@ -140,35 +139,32 @@ def gen_branch_history_sample(
     blen_accum = 0
     while True:
 
-        # Compute the total rate out of the current compound state.
-        # This is the sum of allowed primary transition rates
-        # and allowed blink toggle rates.
-        total_rate = 0.0
+        # Get the list of the allowed moves out of the current state,
+        # and the corresponding rates associated with these moves.
+        compound_state = (primary_state, blink_state)
+        moves = get_moves(compound_state, dg, partition, on_rate, off_rate)
+        successors, rates = zip(*moves)
 
-        # Add the allowed primary rates.
-        for b in dg.successors(primary_state):
-            if blink_state[b]:
-                total_rate += dg[primary_state][b]['weight']
-
-        # Add the allowed blink rates.
-        for state in dg:
-            if state != primary_state:
-                if blink_state[state] == 1:
-                    total_rate += off_rate
-                elif blink_state[state] == 0:
-                    total_rate += on_rate
-                else:
-                    raise Exception('blink state of each part must be binary')
-
-        rate = rates[state]
-        scale = 1 / rate
-        b = np.random.exponential(scale=scale)
-        blen_accum += b
+        # Compute the total rate out of the current compound state,
+        # and draw a random wait time that depends on this total rate.
+        # If this wait time puts us over the allotted time period,
+        # then we are done sampling the histories.
+        total_rate = sum(rates)
+        scale = 1 / total_rate
+        blen_delta = np.random.exponential(scale=scale)
+        blen_accum += blen_delta
         if blen_accum >= blen_in:
             return
-        distn = P[state]
-        state = cmedbutil.random_category(distn)
-        yield blen_accum, state
+
+        # Next we randomly pick a successor state
+        # according to the rate proportions.
+        pre_distn = np.array(rates, dtype=float)
+        distn = pre_distn / np.sum(pre_distn)
+        next_compound_state = successors[cmedbutil.random_category(distn)]
+        primary_state, blink_state = next_compound_state
+
+        # Yield the cumulative time and the new primary and blink states
+        yield blen_accum, primary_state, blink_state
 
 
 # XXX this needs to be changed or deleted
