@@ -33,7 +33,6 @@ as a representation of the sparse rate matrix.
 # and indices into ndarrays.
 # This will mean not using the usual rate matrix reader.
 
-# NOTE: numpy is used only for allclose() comparison
 
 import argparse
 import sqlite3
@@ -44,6 +43,7 @@ import numpy as np
 import networkx as nx
 
 import cmedbutil
+
 
 def get_moves(compound_state, dg, partition, rate_on, rate_off):
     """
@@ -216,11 +216,12 @@ def get_sparse_rate_matrix_info(cursor):
 
     # assert detailed balance
     for a, b in permutations(states, 2):
-        if not np.allclose(
-                distn[a] * dg[a][b]['weight'],
-                distn[b] * dg[b][a]['weight'],
-                ):
-            raise Exception('expected detailed balance')
+        if b in dg[a] and a in dg[b]:
+            if not np.allclose(
+                    distn[a] * dg[a][b]['weight'],
+                    distn[b] * dg[b][a]['weight'],
+                    ):
+                raise Exception('expected detailed balance')
 
     # return the eq distn and the rate graph
     return distn, dg
