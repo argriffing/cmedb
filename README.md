@@ -136,3 +136,14 @@ site patterns, with multiplicities, extracted from an alignment:
     CREATE TABLE patterns (pattern integer, taxon integer, state integer, primary key (pattern, taxon));
     sqlite> 
 
+full history sample of a complicated reversible Markov process on a path:
+
+    $ sqlite3 blink.path.db                     
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE blink_history (part integer, segment integer, state integer, duration real, primary key (part, segment));
+    CREATE TABLE primary_history (segment integer, state integer, duration real, primary key (segment));
+    sqlite> 
+
