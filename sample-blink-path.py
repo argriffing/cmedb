@@ -22,6 +22,9 @@ and a single blink state is known at the other endpoint
 part of the final primary state is in the 'on' blink state),
 but no information about the blink states inside of the path
 is directly observable.
+.
+Possibly use networkx directed weighted graphs
+as a representation of the sparse rate matrix.
 """
 
 #FIXME redo this to not use numpy,
@@ -30,50 +33,132 @@ is directly observable.
 # and indices into ndarrays.
 # This will mean not using the usual rate matrix reader.
 
+# NOTE: numpy is used only for allclose() comparison
+
 import argparse
 import sqlite3
+from collections import defaultdict
+from itertools import permutations
 
 import numpy as np
+import networkx as nx
 
 import cmedbutil
+
+def get_moves(compound_state, dg, partition, on_rate, off_rate):
+    """
+    Get the successor states and their corresponding rates.
+    Compound states have two substates.
+    The first substate is the primary state which is an integer.
+    The second substate is a map from partition part to a binary integer.
+    @param compound_state: current compound state
+    @param dg: directed graph of primary state transition rates
+    @param partition: map from primary state to partition
+    @param on_rate: a blinking rate
+    @param off_rate: a blinking rate
+    @return: a sequence of (successor compound state, rate) pairs
+    """
+
+    # get the set of indices of parts
+    parts = set(partition.values())
+
+    # expand the current compound state into its substates
+    primary_state, blink_state = compound_state
+    curr_part = partition[primary_state]
+
+    # assert that the current part is blinked on
+    if not blink_state[curr_part]:
+        raise Exception('invalid compound state')
+
+    # Compute the allowed moves out of the current compound state.
+    # This is the sum of allowed primary transitions
+    # and allowed blink toggles.
+    move_rate_pairs = []
+
+    # Add the allowed primary transitions.
+    for b in dg.successors(primary_state):
+        next_part = partition[b]
+        if blink_state[next_part]:
+            move = (b, dict(blink_state))
+            rate = dg[primary_state][b]['weight']
+            move_rate_pairs.append((move, rate))
+
+    # Add the allowed blink rates.
+    for blink_part in parts:
+        if blink_part != curr_part:
+            next_blink_state = dict(blink_state)
+            if blink_state[blink_part] == 1:
+                next_blink_state[blink_part] = 0
+                rate = off_rate
+            elif blink_state[blink_part] == 0:
+                next_blink_state[blink_part] = 1
+                rate = on_rate
+            else:
+                raise Exception('blink state of each part must be binary')
+            move = (primary_state, next_blink_state)
+            move_rate_pairs.append((move, rate))
+
+    # Return the allowed moves out of the current state,
+    # and their corresponding rates.
+    return move_rate_pairs
 
 
 # XXX under construction
 def gen_branch_history_sample(
-        primary_state_in, blink_states_in, blen_in,
-        primary_Q,
+        primary_state_in, blink_state_in, blen_in,
+        dg,
         partition, on_rate, off_rate,
         ):
     """
     This function is defined in analogy to gen_branch_history_sample.
     Path sampling along a branch with a known initial state.
-    Yield (transition time, new state) pairs.
+    Yield (transition time, new primary state, new blink state) tuples.
     This function takes arguments divided into three groups.
     The first group defines the initial state and the path duration.
-    The second group defines the primary process
-    without regard to blinking.
+    The second group defines the primary process without regard to blinking;
+    this has a weighted directed networkx graph for sparse rates.
     The third group defines the partition of the primary state space
     and the toggling rates of the modulating blinking processes.
     @param primary_state_in: initial integer state of the observable process
     @param blink_state_in: initial binary tuple state of the blinking process
     @param blen_in: length of the branch
-    @param primary_Q: primary process rate matrix without regard to blinking
+    @param dg: rate matrix without regard to blinking
     @param partition: maps a primary state to a partition index for blinking
     @param on_rate: instantaneous off-to-on blinking rate
     @param off_rate: instantaneous on-to-off blinking rate
     """
-    #XXX the docstring is up to date but the implmenetation is not
+
+    # The state space of this process is somewhat complicated.
+    # The primary state is an integer.
+    # The blink state is a map from partition part to binary blink state.
+    # An invariant of the compound state
+    # is that the blink state of part k must be 1 if the partition part of
+    # the primary state is k.
+    # Otherwise, any combination of primary states and blink states is allowed.
     primary_state = primary_state_in
-    blink_state = tuple(blink_state_in)
+    blink_state = dict(blink_state_in)
     blen_accum = 0
     while True:
 
-        # Compute the total rate out of the compound state.
+        # Compute the total rate out of the current compound state.
         # This is the sum of allowed primary transition rates
         # and allowed blink toggle rates.
-        total_primary_rate = 0.0
-        for j in primary_Q:
-            pass
+        total_rate = 0.0
+
+        # Add the allowed primary rates.
+        for b in dg.successors(primary_state):
+            if blink_state[b]:
+                total_rate += dg[primary_state][b]['weight']
+
+        # Add the allowed blink rates.
+        for state in dg:
+            if state != primary_state:
+                if blink_state[state] == 1:
+                    total_rate += off_rate
+                elif blink_state[state] == 0:
+                    total_rate += on_rate
+                else:
+                    raise Exception('blink state of each part must be binary')
 
         rate = rates[state]
         scale = 1 / rate
@@ -182,14 +267,19 @@ def build_single_history_table(
     conn.commit()
 
 
-#XXX copypasted
-def get_rate_matrix_info(cursor):
+def get_sparse_rate_matrix_info(cursor):
     """
+    This is a non-numpy customization of the usual get_rate_matrix_info.
+    In this function we ignore the 'states' table with the state names,
+    but we care about the sparse rates and the equilibrium distribution.
+    Return a couple of things.
+    The first thing is a map from a state to an equilibrium probability.
+    The second thing is a sparse rate matrix as a networkx weighted digraph.
     @param cursor: sqlite3 database cursor
-    @return: sorted state list, stationary distribution, dense rate matrix
+    @return: eq distn, rate graph
     """
 
-    # get the sorted list of all states
+    # get a set of all states
     cursor.execute(
             'select state from distn '
             'union '
@@ -199,42 +289,42 @@ def get_rate_matrix_info(cursor):
             'union '
             'select state from states '
             )
-    states = sorted(t[0] for t in cursor)
-
-    # count the states
+    states = set(t[0] for t in cursor)
     nstates = len(states)
 
-    # define the map from state to rate matrix index
-    s_to_i = dict((s, i) for i, s in enumerate(states))
-
-    # construct the rate matrix
-    cursor.execute('select source, sink, rate from rates')
-    pre_Q = np.zeros((nstates, nstates), dtype=float)
-    for si, sj, rate in cursor:
-        pre_Q[s_to_i[si], s_to_i[sj]] = rate
-    Q = pre_Q - np.diag(np.sum(pre_Q, axis=1))
-
-    # construct the distribution of states at the root
+    # get the sparse equilibrium distribution
     cursor.execute('select state, prob from distn')
-    state_prob_pairs = list(cursor)
-    distn = np.zeros(nstates)
-    for state, prob in state_prob_pairs:
-        distn[s_to_i[state]] = prob
+    distn = dict(cursor)
+
+    # construct the rate matrix as a networkx weighted directed graph
+    dg = nx.DiGraph()
+    cursor.execute('select source, sink, rate from rates')
+    for a, b, weight in cursor:
+        dg.add_edge(a, b, weight=weight)
 
     # assert that the distribution has the right form
-    cmedbutil.assert_stochastic_vector(distn)
+    if not all(0 <= p <= 1 for p in distn.values()):
+        raise Exception(
+                'equilibrium probabilities '
+                'should be in the interval [0, 1]')
+    if not np.allclose(sum(distn.values()), 1):
+        raise Exception('equilibrium probabilities should sum to 1')
 
-    # assert that the rate matrix is actually a rate matrix
-    cmedbutil.assert_rate_matrix(Q)
+    # assert that rates are not negative
+    if any(edge['weight'] < 0 for edge in dg.edges(data=True)):
+        raise Exception('rates should be non-negative')
 
-    # assert that the distribution is at equilibrium w.r.t. the rate matrix
-    cmedbutil.assert_equilibrium(Q, distn)
+    # assert detailed balance
+    for a, b in permutations(states, 2):
+        if not np.allclose(
+                distn[a] * dg[a][b]['weight'],
+                distn[b] * dg[b][a]['weight'],
+                ):
+            raise Exception('expected detailed balance')
 
-    # assert that the detailed balance equations are met
-    cmedbutil.assert_detailed_balance(Q, distn)
+    # return the eq distn and the rate graph
+    return distn, dg
 
-    # return the validated inputs describing the stochastic process
-    return states, distn, Q
 
 
 # XXX this has been copypasted and needs to be changed
