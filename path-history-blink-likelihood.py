@@ -124,7 +124,7 @@ def get_sparse_rate_matrix_info(cursor):
     return distn, dg
 
 
-def get_partially_observed_blink_thread_likelihood(
+def get_partially_observed_blink_thread_log_likelihood(
         part, partition, distn, dg, path_history,
         rate_on, rate_off,
         endpoint_assignment,
@@ -144,14 +144,14 @@ def get_partially_observed_blink_thread_likelihood(
     # count the number of segments
     nsegments = len(path_history)
 
-    # Init the path likelihood.
-    finite_path_lk = 1.0
+    # init the path log likelihood
+    finite_path_ll = 0.0
 
     # The initial state contributes to the likelihood.
     blink_probs = [
             rate_off / float(rate_on + rate_off),
             rate_on / float(rate_on + rate_off)]
-    finite_path_lk *= blink_probs[endpoint_assignment[0]]
+    finite_path_ll += math.log(blink_probs[endpoint_assignment[0]])
 
     # multiply the likelihood across all segments along the thread
     for i in range(nsegments):
@@ -166,7 +166,7 @@ def get_partially_observed_blink_thread_likelihood(
         # then set the likelihood to zero.
         if partition[primary_state] == part:
             if not (ba and bb):
-                return 0.0
+                return -float('Inf')
 
         # Get the conditional rate of turning off the blinking.
         # This is zero if the primary state corresponds to the
@@ -195,13 +195,13 @@ def get_partially_observed_blink_thread_likelihood(
         P = scipy.linalg.expm(Q_micro * duration)
 
         # Contribute to the likelihood.
-        finite_path_lk *= P[ba, bb]
+        finite_path_ll += math.log(P[ba, bb])
 
     # Return the finite path likelihood for this blinking thread.
-    return finite_path_lk
+    return finite_path_ll
 
 
-def get_blink_thread_likelihood(
+def get_blink_thread_log_likelihood(
         part, partition, distn, dg, path_history,
         rate_on, rate_off):
     """
@@ -212,7 +212,7 @@ def get_blink_thread_likelihood(
     @param path_history: triples of (segment, state, blen)
     @param rate_on: a blink rate
     @param rate_off: a blink rate
-    @return: likelihood
+    @return: log likelihood
     """
 
     # count the number of segments and the number of segment endpoints
@@ -220,17 +220,18 @@ def get_blink_thread_likelihood(
     npoints = nsegments + 1
 
     # initialize the likelihood
-    likelihood_accum = 0.0
+    log_likelihoods = []
 
     # sum the likelihood over all possible states at the segment endpoints
     for endpoint_assignment in product((0, 1), repeat=npoints):
-        likelihood_accum += get_partially_observed_blink_thread_likelihood(
+        log_likelihood = get_partially_observed_blink_thread_log_likelihood(
                 part, partition, distn, dg, path_history,
                 rate_on, rate_off,
                 endpoint_assignment)
+        log_likelihoods.append(log_likelihood)
 
-    # report the likelihood
-    return likelihood_accum
+    # report the log likelihood
+    return scipy.misc.logsumexp(log_likelihoods)
 
 
 def get_primary_log_likelihood(distn, dg, path_history):
@@ -297,10 +298,9 @@ def main(args):
 
     # add log likelihood blink thread log likelihood contributions
     for part in range(nparts):
-        blink_thread_lk = get_blink_thread_likelihood(
+        log_likelihood += get_blink_thread_log_likelihood(
                 part, partition, distn, dg, path_history,
                 args.rate_on, args.rate_off)
-        log_likelihood += math.log(blink_thread_lk)
 
     # report the likelihood
     print 'log likelihood:', log_likelihood
