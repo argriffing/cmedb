@@ -169,14 +169,14 @@ def get_partially_observed_blink_thread_likelihood(
                 return 0.0
 
         # Get the conditional rate of turning off the blinking.
-        # This is zero if the primary state correspondis to the
+        # This is zero if the primary state corresponds to the
         # blink thread state, and otherwise it is rate_off.
         if partition[primary_state] == part:
             conditional_rate_off = 0.0
         else:
             conditional_rate_off = rate_off
 
-        # Get the conditional rate of turning off the blinking.
+        # Get the conditional rate of turning on the blinking.
         # This is always rate_on.
         conditional_rate_on = rate_on
 
