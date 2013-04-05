@@ -40,6 +40,7 @@ import sqlite3
 import math
 import itertools
 from itertools import permutations
+from itertools import product
 
 import numpy as np
 import networkx as nx
@@ -123,7 +124,83 @@ def get_sparse_rate_matrix_info(cursor):
     return distn, dg
 
 
-def get_blink_thread_ll(
+def get_partially_observed_blink_thread_likelihood(
+        part, partition, distn, dg, path_history,
+        rate_on, rate_off,
+        endpoint_assignment,
+        ):
+    """
+    @param part: the part of the partition defining the current blink thred
+    @param partition: a map from primary state to part
+    @param distn: map from primary state to equilibrium probability
+    @param dg: sparse primary state rate matrix as weighted directed networkx
+    @param path_history: triples of (segment, state, blen)
+    @param rate_on: a blink rate
+    @param rate_off: a blink rate
+    @param endpoint_assignment: an assignment of blink states at primary trans
+    @return: a log likelihood
+    """
+
+    # count the number of segments
+    nsegments = len(path_history)
+
+    # Init the path likelihood.
+    finite_path_lk = 1.0
+
+    # The initial state contributes to the likelihood.
+    blink_probs = [
+            rate_off / float(rate_on + rate_off),
+            rate_on / float(rate_on + rate_off)]
+    finite_path_lk *= blink_probs[endpoint_assignment[0]]
+
+    # multiply the likelihood across all segments along the thread
+    for i in range(nsegments):
+
+        # extract the primary and blink state
+        segment, primary_state, duration = path_history[i]
+        ba = endpoint_assignment[i]
+        bb = endpoint_assignment[i+1]
+
+        # If the blinking state is 'off' at an endpoint
+        # adjacent to a segment with a compatible primary state
+        # then set the likelihood to zero.
+        if partition[primary_state] == part and ba == 0 and bb == 0:
+            return 0.0
+
+        # Get the conditional rate of turning off the blinking.
+        # This is zero if the primary state correspondis to the
+        # blink thread state, and otherwise it is rate_off.
+        if partition[primary_state] == part:
+            conditional_rate_off = 0.0
+        else:
+            conditional_rate_off = rate_off
+
+        # Get the conditional rate of turning off the blinking.
+        # This is always rate_on.
+        conditional_rate_on = rate_on
+
+        # Get the absorption rate.
+        # This is the sum of primary transition rates
+        # into the part that corresponds to the current blink thread state.
+        rate_absorb = 0.0
+        for sink in dg.successors(primary_state):
+            rate = dg[primary_state][sink]['weight']
+            if partition[sink] == part:
+                rate_absorb += rate
+
+        # Construct the micro rate matrix and transition matrix.
+        Q_micro = get_micro_rate_matrix(
+                conditional_rate_off, conditional_rate_on, rate_absorb)
+        P = scipy.linalg.expm(Q_micro * duration)
+
+        # Contribute to the likelihood.
+        finite_path_lk *= P[ba, bb]
+
+    # Return the finite path likelihood for this blinking thread.
+    return finite_path_lk
+
+
+def get_blink_thread_likelihood(
         part, partition, distn, dg, path_history,
         rate_on, rate_off):
     """
@@ -134,9 +211,53 @@ def get_blink_thread_ll(
     @param path_history: triples of (segment, state, blen)
     @param rate_on: a blink rate
     @param rate_off: a blink rate
-    @return: a log likelihood
+    @return: likelihood
     """
-    return -3.14
+
+    # count the number of segments and the number of segment endpoints
+    nsegments = len(path_history)
+    npoints = nsegments + 1
+
+    # initialize the likelihood
+    likelihood_accum = 0.0
+
+    # sum the likelihood over all possible states at the segment endpoints
+    for endpoint_assignment in product((0, 1), repeat=npoints):
+        likelihood_accum += get_partially_observed_blink_thread_likelihood(
+                part, partition, distn, dg, path_history,
+                rate_on, rate_off,
+                endpoint_assignment)
+
+    # report the likelihood
+    return likelihood_accum
+
+
+def get_primary_log_likelihood(distn, dg, path_history):
+    """
+    This includes the initial state and the transitions.
+    It does not include the dwell times,
+    because these contributions are added by the blinking threads.
+    @param distn: map from primary state to equilibrium probability
+    @param dg: sparse primary state rate matrix as weighted directed networkx
+    @param path_history: triples of (segment, state, blen)
+    @return: log likelihood
+    """
+
+    # initialize
+    log_likelihood = 0.0
+    seg_seq, state_seq, duration_seq = zip(*path_history)
+
+    # add the contribution of the equilibrium distribution
+    initial_primary_state = state_seq[0]
+    log_likelihood += math.log(distn[initial_primary_state])
+
+    # add the contribution of the primary state transitions
+    for a, b in cmedbutil.pairwise(state_seq):
+        rate = dg[a][b]['weight']
+        log_likelihood += math.log(rate)
+
+    # return the log likelihood
+    return log_likelihood
 
 
 def main(args):
@@ -167,16 +288,22 @@ def main(args):
     path_history = list(cursor)
     conn.close()
 
-    # compute the log likelihood by summing over blink thread log likelihoods
-    ll = 0.0
+    # init the log likelihood
+    log_likelihood = 0.0
+
+    # add primary state log likelihood contributions
+    log_likelihood += get_primary_log_likelihood(distn, dg, path_history)
+
+    # add log likelihood blink thread log likelihood contributions
     for part in range(nparts):
-        ll += get_blink_thread_ll(
+        blink_thread_lk = get_blink_thread_likelihood(
                 part, partition, distn, dg, path_history,
                 args.rate_on, args.rate_off)
+        log_likelihood += math.log(blink_thread_lk)
 
     # report the likelihood
-    print 'log likelihood:', ll
-    print 'likelihood:', math.exp(ll)
+    print 'log likelihood:', log_likelihood
+    print 'likelihood:', math.exp(log_likelihood)
 
 
 def get_conditional_likelihood_from_history(Q, rates, P, states, history):
