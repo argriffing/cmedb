@@ -1,6 +1,19 @@
 """
-Compute a partially observed path history likelihood.
+Compute blinking process path history likelihood.
 
+The process is assumed to consist of two simultaneously evolving components.
+The primary component is assumed to be observable,
+and the marginal process of this component
+is a Markov modulated continuous-time process.
+The secondary component is assumed to not be observable,
+and it consists of multiple Markov-modulated marginal processes.
+This script tries to compute the history likelihood
+by integrating over the unobserved process.
+This will involve using dynamic programming to compute
+the likelihood for a discrete-time finite-state
+inhomogeneous hidden Markov model.
+.
+Compute a partially observed path history likelihood.
 This is a complicated script involving Markov modulation.
 An observable genetic history is evolving along a path,
 and we assume that we know its state at every point along this path.
@@ -15,60 +28,54 @@ in this script we assume that the observable genetic history evolves
 according to a Markov modulated continuous-time process
 for which the modulating states are hidden.
 .
-Another blinking-process path-sampling script could be useful.
-It could take a rate matrix and a state partition
-and a blink birth rate and death rate and an elapsed time as inputs.
-The output would be a couple of tables in an sqlite3 database.
-The history table would map path segment indices
-to (duration, primary state) pairs.
-The blink table would map (part, path segment index) pairs
-to (duration, blink state) pairs.
+The following command can be used to sample codon.path.history.db.
+$ python ctmc-segment-bridge-sampling.py
+--rates=codon.rate.matrix.db --method=modified-rejection
+--outfile=codon.path.history.db --nsamples=1 --table=history --elapsed=10
+--initial=0 --final=60
 """
 
 import argparse
 import sqlite3
 import math
 import itertools
+from itertools import permutations
 
 import numpy as np
-import scipy.stats
+import networkx as nx
+import scipy.linalg
 
 import cmedbutil
 
-#XXX unfinished
 
-#XXX this is copypasted
-def decompose_rates(Q):
+def get_micro_rate_matrix(rate_off, rate_on, rate_absorb):
     """
-    Break a rate matrix into two parts.
-    The first part consists of the rates away from each state;
-    this information is contained in the diagonal of the rate matrix.
-    The second part consists of a transition matrix
-    that defines the distribution over sink states conditional
-    on an instantaneous change away from a given source state.
-    Note that this function never requires expm of Q.
-    Also, P preserves the sparsity pattern of Q.
-    @param Q: rate matrix
-    @return: rates, P
+    The micro state order is ('off', 'on', 'absorbed').
+    @param rate_off: rate from the 'on' state to the 'off' state
+    @param rate_on: rate from the 'off' state to the 'on' state
+    @param rate_absorb: rate from the 'on' state to the 'absorbing' state
+    @return: a continuous time rate matrix
     """
-    nstates = len(Q)
-    rates = -np.diag(Q)
-    P = np.array(Q)
-    for i, rate in enumerate(rates):
-        if rate:
-            P[i, i] = 0
-            P[i] /= rate
-    return rates, P
+    return np.array([
+        [-rate_on, rate_on, 0],
+        [rate_off, -(rate_off + rate_absorb), rate_absorb],
+        [0, 0, 0]], dtype=float)
 
 
-#XXX this is copypasted
-def get_rate_matrix_info(cursor):
+#XXX copypasted
+def get_sparse_rate_matrix_info(cursor):
     """
+    This is a non-numpy customization of the usual get_rate_matrix_info.
+    In this function we ignore the 'states' table with the state names,
+    but we care about the sparse rates and the equilibrium distribution.
+    Return a couple of things.
+    The first thing is a map from a state to an equilibrium probability.
+    The second thing is a sparse rate matrix as a networkx weighted digraph.
     @param cursor: sqlite3 database cursor
-    @return: sorted state list, stationary distribution, dense rate matrix
+    @return: eq distn, rate graph
     """
 
-    # get the sorted list of all states
+    # get a set of all states
     cursor.execute(
             'select state from distn '
             'union '
@@ -78,109 +85,98 @@ def get_rate_matrix_info(cursor):
             'union '
             'select state from states '
             )
-    states = sorted(t[0] for t in cursor)
-
-    # count the states
+    states = set(t[0] for t in cursor)
     nstates = len(states)
 
-    # define the map from state to rate matrix index
-    s_to_i = dict((s, i) for i, s in enumerate(states))
-
-    # construct the rate matrix
-    cursor.execute('select source, sink, rate from rates')
-    pre_Q = np.zeros((nstates, nstates), dtype=float)
-    for si, sj, rate in cursor:
-        pre_Q[s_to_i[si], s_to_i[sj]] = rate
-    Q = pre_Q - np.diag(np.sum(pre_Q, axis=1))
-
-    # construct the distribution of states at the root
+    # get the sparse equilibrium distribution
     cursor.execute('select state, prob from distn')
-    state_prob_pairs = list(cursor)
-    distn = np.zeros(nstates)
-    for state, prob in state_prob_pairs:
-        distn[s_to_i[state]] = prob
+    distn = dict(cursor)
+
+    # construct the rate matrix as a networkx weighted directed graph
+    dg = nx.DiGraph()
+    cursor.execute('select source, sink, rate from rates')
+    for a, b, weight in cursor:
+        dg.add_edge(a, b, weight=weight)
 
     # assert that the distribution has the right form
-    cmedbutil.assert_stochastic_vector(distn)
+    if not all(0 <= p <= 1 for p in distn.values()):
+        raise Exception(
+                'equilibrium probabilities '
+                'should be in the interval [0, 1]')
+    if not np.allclose(sum(distn.values()), 1):
+        raise Exception('equilibrium probabilities should sum to 1')
 
-    # assert that the rate matrix is actually a rate matrix
-    cmedbutil.assert_rate_matrix(Q)
+    # assert that rates are not negative
+    if any(data['weight'] < 0 for a, b, data in dg.edges(data=True)):
+        raise Exception('rates should be non-negative')
 
-    # assert that the distribution is at equilibrium w.r.t. the rate matrix
-    cmedbutil.assert_equilibrium(Q, distn)
+    # assert detailed balance
+    for a, b in permutations(states, 2):
+        if b in dg[a] and a in dg[b]:
+            if not np.allclose(
+                    distn[a] * dg[a][b]['weight'],
+                    distn[b] * dg[b][a]['weight'],
+                    ):
+                raise Exception('expected detailed balance')
 
-    # assert that the detailed balance equations are met
-    cmedbutil.assert_detailed_balance(Q, distn)
+    # return the eq distn and the rate graph
+    return distn, dg
 
-    # return the validated inputs describing the stochastic process
-    return states, distn, Q
+
+def get_blink_thread_ll(
+        part, partition, distn, dg, path_history,
+        rate_on, rate_off):
+    """
+    @param part: the part of the partition defining the current blink thred
+    @param partition: a map from primary state to part
+    @param distn: map from primary state to equilibrium probability
+    @param dg: sparse primary state rate matrix as weighted directed networkx
+    @param path_history: triples of (segment, state, blen)
+    @param rate_on: a blink rate
+    @param rate_off: a blink rate
+    @return: a log likelihood
+    """
+    return -3.14
 
 
 def main(args):
 
-    # read and validate the rate matrix info from the sqlite3 database file
+    # read the sparse rate matrix from a database file
     conn = sqlite3.connect(args.rates)
     cursor = conn.cursor()
-    states, distn, Q = get_rate_matrix_info(cursor)
+    distn, dg = get_sparse_rate_matrix_info(cursor)
     conn.close()
 
-    # read the path histories from the sqlite3 database file
-    conn = sqlite3.connect(args.path_histories)
+    # Read the partition from a database file.
+    # The hidden blinking process controls the state transition
+    # of the primary process according to this partition
+    # of primary process states.
+    conn = sqlite3.connect(args.partition)
     cursor = conn.cursor()
-    cursor.execute('select history, segment, state, blen from histories')
-    data = sorted(cursor)
-    cursor.execute('select state from histories')
-    states = sorted(set(t[0] for t in cursor))
+    partition = dict(cursor.execute('select state, part from partition'))
     conn.close()
 
-    # summarize the Q matrix in a way that does not use expm
-    rates, P = decompose_rates(Q)
+    # get the set of indices of parts
+    parts = set(partition.values())
+    nparts = len(parts)
 
-    # Define the map from state to rate matrix index,
-    # and count the number of different states in the history.
-    s_to_i = dict((s, i) for i, s in enumerate(states))
-    nstates = len(states)
+    # read the primary state path history from the sqlite3 database file
+    conn = sqlite3.connect(args.path_history)
+    cursor = conn.cursor()
+    cursor.execute('select segment, state, blen from history order by segment')
+    path_history = list(cursor)
+    conn.close()
 
-    # parse the sample path histories from the table
-    histories = []
-    segment = []
-    for row in data:
-        history_index, segment_index, state, blen = row
-        if history_index > len(histories):
-            histories.append(segment)
-            segment = []
-        if history_index != len(histories):
-            raise Exception('invalid history index')
-        if segment_index != len(segment):
-            raise Exception('invalid segment index')
-        segment.append((state, blen))
-    histories.append(segment)
+    # compute the log likelihood by summing over blink thread log likelihoods
+    ll = 0.0
+    for part in range(nparts):
+        ll += get_blink_thread_ll(
+                part, partition, distn, dg, path_history,
+                args.rate_on, args.rate_off)
 
-    # Compute the likelihood for each path history.
-    likelihoods = []
-    for history in histories:
-        likelihood = get_conditional_likelihood_from_history(
-                Q, rates, P, states, history)
-        likelihoods.append(likelihood)
-
-    # Compute the probability of the final state
-    # conditional on the initial state and the history
-    # for each path history.
-    conditional_likelihoods = []
-    for history in histories:
-        likelihood = get_conditional_final(
-                Q, rates, P, states, history)
-        conditional_likelihoods.append(likelihood)
-
-    # report likelihood summary
-    #print 'likelihood arithmetic mean:', np.mean(likelihoods)
-    #print 'likelihood geometric mean:', scipy.stats.gmean(likelihoods)
-    #print 'likelihood harmonic mean:', scipy.stats.hmean(likelihoods)
-    #print
-    print 'expected probability of final point'
-    print 'conditional on the history and the initial point:'
-    print np.mean(conditional_likelihoods)
-    print
+    # report the likelihood
+    print 'log likelihood:', ll
+    print 'likelihood:', math.exp(ll)
 
 
 def get_conditional_likelihood_from_history(Q, rates, P, states, history):
@@ -251,10 +247,30 @@ def get_conditional_final(Q, rates, P, states, history):
 
 
 if __name__ == '__main__':
+
+    # define some methods
+    method_choices = (
+            'brute',
+            'dynamic',
+            )
+
+    # define the command line parameters
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--rate-on',
+            type=cmedbutil.pos_float, default=1.0,
+            help='rate at which blink states change from off to on')
+    parser.add_argument('--rate-off',
+            type=cmedbutil.pos_float, default=1.0,
+            help='rate at which blink states change from on to off')
+    parser.add_argument('--method', choices=method_choices, default='brute',
+            help='method of integrating over hidden blink states')
+    parser.add_argument('--path-history', default='path.history.db',
+            help='input path history as an sqlite3 database file')
     parser.add_argument('--rates', default='rate.matrix.db',
-            help='time-reversible rate matrix as an sqlite3 database file')
-    parser.add_argument('--path-histories', default='path.histories.db',
-            help='input path histories as an sqlite3 database file')
+            help=('continuous-time Markov substitution process '
+                'as an sqlite3 database file'))
+    parser.add_argument('--partition', default='partition.db',
+            help=('a partition of the primary states '
+                'as an sqlite3 database file'))
     main(parser.parse_args())
 
