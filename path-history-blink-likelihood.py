@@ -164,8 +164,9 @@ def get_partially_observed_blink_thread_likelihood(
         # If the blinking state is 'off' at an endpoint
         # adjacent to a segment with a compatible primary state
         # then set the likelihood to zero.
-        if partition[primary_state] == part and ba == 0 and bb == 0:
-            return 0.0
+        if partition[primary_state] == part:
+            if not (ba and bb):
+                return 0.0
 
         # Get the conditional rate of turning off the blinking.
         # This is zero if the primary state correspondis to the
