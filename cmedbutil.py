@@ -39,6 +39,13 @@ def pos_int(x):
                 'value must be a positive integer')
     return x
 
+def nonneg_float(x):
+    x = float(x)
+    if x < 0:
+        raise argparse.ArgumentTypeError(
+                'value must be a non-negative floating point number')
+    return x
+
 def pos_float(x):
     x = float(x)
     if x <= 0:

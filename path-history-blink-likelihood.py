@@ -148,10 +148,12 @@ def get_partially_observed_blink_thread_log_likelihood(
     finite_path_ll = 0.0
 
     # The initial state contributes to the likelihood.
-    blink_probs = [
-            rate_off / float(rate_on + rate_off),
-            rate_on / float(rate_on + rate_off)]
-    finite_path_ll += math.log(blink_probs[endpoint_assignment[0]])
+    blink_distn = np.array([
+        rate_off / float(rate_on + rate_off),
+        rate_on / float(rate_on + rate_off),
+        ], dtype=float)
+    log_blink_distn = np.log(blink_distn)
+    finite_path_ll += log_blink_distn[endpoint_assignment[0]]
 
     # multiply the likelihood across all segments along the thread
     for i in range(nsegments):
@@ -192,10 +194,11 @@ def get_partially_observed_blink_thread_log_likelihood(
         # Construct the micro rate matrix and transition matrix.
         Q_micro = get_micro_rate_matrix(
                 conditional_rate_off, conditional_rate_on, rate_absorb)
-        P = scipy.linalg.expm(Q_micro * duration)
+        P_micro = scipy.linalg.expm(Q_micro * duration)
+        P_micro_log = np.log(P_micro)
 
         # Contribute to the likelihood.
-        finite_path_ll += math.log(P[ba, bb])
+        finite_path_ll += P_micro_log[ba, bb]
 
     # Return the finite path likelihood for this blinking thread.
     return finite_path_ll
@@ -264,6 +267,10 @@ def get_primary_log_likelihood(distn, dg, path_history):
 
 def main(args):
 
+    # validate blinking rates
+    if not (args.rate_on + args.rate_off):
+        raise argparse.ArgumentError('equilibrium blink state is undefined')
+
     # read the sparse rate matrix from a database file
     conn = sqlite3.connect(args.rates)
     cursor = conn.cursor()
@@ -319,10 +326,10 @@ if __name__ == '__main__':
     # define the command line parameters
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rate-on',
-            type=cmedbutil.pos_float, default=1.0,
+            type=cmedbutil.nonneg_float, default=1.0,
             help='rate at which blink states change from off to on')
     parser.add_argument('--rate-off',
-            type=cmedbutil.pos_float, default=1.0,
+            type=cmedbutil.nonneg_float, default=1.0,
             help='rate at which blink states change from on to off')
     parser.add_argument('--method', choices=method_choices, default='brute',
             help='method of integrating over hidden blink states')
