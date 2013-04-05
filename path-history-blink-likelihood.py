@@ -130,7 +130,7 @@ def get_partially_observed_blink_thread_likelihood(
         endpoint_assignment,
         ):
     """
-    @param part: the part of the partition defining the current blink thred
+    @param part: the part of the partition defining the current blink thread
     @param partition: a map from primary state to part
     @param distn: map from primary state to equilibrium probability
     @param dg: sparse primary state rate matrix as weighted directed networkx
