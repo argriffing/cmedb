@@ -1,11 +1,9 @@
 """
-Compute fast blinking process path history likelihood.
+Compute slow blinking process path history likelihood.
 
-This is a fast-blinking limit,
+This is a slow-blinking limit,
 but the blinked-on proportion is still meaningfully defined.
 """
-
-#XXX this has the effect of just reducing nonsynonymous rate
 
 import argparse
 import sqlite3
@@ -19,23 +17,6 @@ import networkx as nx
 import scipy.linalg
 
 import cmedbutil
-
-
-class BlinkProportionError(Exception): pass
-
-
-def get_micro_rate_matrix(rate_off, rate_on, rate_absorb):
-    """
-    The micro state order is ('off', 'on', 'absorbed').
-    @param rate_off: rate from the 'on' state to the 'off' state
-    @param rate_on: rate from the 'off' state to the 'on' state
-    @param rate_absorb: rate from the 'on' state to the 'absorbing' state
-    @return: a continuous time rate matrix
-    """
-    return np.array([
-        [-rate_on, rate_on, 0],
-        [rate_off, -(rate_off + rate_absorb), rate_absorb],
-        [0, 0, 0]], dtype=float)
 
 
 #XXX copypasted
@@ -101,8 +82,8 @@ def get_sparse_rate_matrix_info(cursor):
 
 def get_partially_observed_blink_thread_log_likelihood(
         part, partition, distn, dg, path_history,
-        rate_on, rate_off,
-        endpoint_assignment,
+        proportion_on,
+        blink_state,
         ):
     """
     @param part: the part of the partition defining the current blink thread
@@ -110,9 +91,8 @@ def get_partially_observed_blink_thread_log_likelihood(
     @param distn: map from primary state to equilibrium probability
     @param dg: sparse primary state rate matrix as weighted directed networkx
     @param path_history: triples of (segment, state, blen)
-    @param rate_on: a blink rate
-    @param rate_off: a blink rate
-    @param endpoint_assignment: an assignment of blink states at primary trans
+    @param proportion_on: equilibrium probability of blink state 'on'
+    @param blink_state: the state of the blink thread
     @return: a log likelihood
     """
 
@@ -122,58 +102,38 @@ def get_partially_observed_blink_thread_log_likelihood(
     # init the path log likelihood
     finite_path_ll = 0.0
 
+    # slowly and inefficiently get the first primary state
+    seg_seq, primary_state_seq, duration_seq = zip(*path_history)
+    initial_primary_state = primary_state_seq[0]
+
     # The initial state contributes to the likelihood.
-    blink_distn = np.array([
-        rate_off / float(rate_on + rate_off),
-        rate_on / float(rate_on + rate_off),
-        ], dtype=float)
-    log_blink_distn = np.log(blink_distn)
-    finite_path_ll += log_blink_distn[endpoint_assignment[0]]
+    if partition[initial_primary_state] == part:
+        if not blink_state:
+            return -float('Inf')
+    else:
+        blink_distn = np.array([1-proportion_on, proportion_on], dtype=float)
+        log_blink_distn = np.log(blink_distn)
+        finite_path_ll += log_blink_distn[blink_state]
 
     # multiply the likelihood across all segments along the thread
     for i in range(nsegments):
 
         # extract the primary and blink state
         segment, primary_state, duration = path_history[i]
-        ba = endpoint_assignment[i]
-        bb = endpoint_assignment[i+1]
 
-        # If the blinking state is 'off' at an endpoint
-        # adjacent to a segment with a compatible primary state
-        # then set the likelihood to zero.
-        if partition[primary_state] == part:
-            if not (ba and bb):
-                return -float('Inf')
-
-        # Get the conditional rate of turning off the blinking.
-        # This is zero if the primary state corresponds to the
-        # blink thread state, and otherwise it is rate_off.
-        if partition[primary_state] == part:
-            conditional_rate_off = 0.0
+        # If the blink state is on,
+        # then penalize long duration in primary states with high escape rate.
+        # Otherwise terminally penalize impossible primary states.
+        if blink_state:
+            rate_absorb = 0.0
+            for sink in dg.successors(primary_state):
+                rate = dg[primary_state][sink]['weight']
+                if partition[sink] == part:
+                    rate_absorb += rate
+            finite_path_ll -= duration * rate_absorb
         else:
-            conditional_rate_off = rate_off
-
-        # Get the conditional rate of turning on the blinking.
-        # This is always rate_on.
-        conditional_rate_on = rate_on
-
-        # Get the absorption rate.
-        # This is the sum of primary transition rates
-        # into the part that corresponds to the current blink thread state.
-        rate_absorb = 0.0
-        for sink in dg.successors(primary_state):
-            rate = dg[primary_state][sink]['weight']
-            if partition[sink] == part:
-                rate_absorb += rate
-
-        # Construct the micro rate matrix and transition matrix.
-        Q_micro = get_micro_rate_matrix(
-                conditional_rate_off, conditional_rate_on, rate_absorb)
-        P_micro = scipy.linalg.expm(Q_micro * duration)
-        P_micro_log = np.log(P_micro)
-
-        # Contribute to the likelihood.
-        finite_path_ll += P_micro_log[ba, bb]
+            if partition[primary_state] == part:
+                return -float('Inf')
 
     # Return the finite path likelihood for this blinking thread.
     return finite_path_ll
@@ -181,15 +141,15 @@ def get_partially_observed_blink_thread_log_likelihood(
 
 def get_blink_thread_log_likelihood(
         part, partition, distn, dg, path_history,
-        rate_on, rate_off):
+        proportion_on,
+        ):
     """
     @param part: the part of the partition defining the current blink thred
     @param partition: a map from primary state to part
     @param distn: map from primary state to equilibrium probability
     @param dg: sparse primary state rate matrix as weighted directed networkx
     @param path_history: triples of (segment, state, blen)
-    @param rate_on: a blink rate
-    @param rate_off: a blink rate
+    @param proportion_on: equilibrium probability of blink state 'on'
     @return: log likelihood
     """
 
@@ -201,11 +161,11 @@ def get_blink_thread_log_likelihood(
     log_likelihoods = []
 
     # sum the likelihood over all possible states at the segment endpoints
-    for endpoint_assignment in product((0, 1), repeat=npoints):
+    for blink_state in (0, 1):
         log_likelihood = get_partially_observed_blink_thread_log_likelihood(
                 part, partition, distn, dg, path_history,
-                rate_on, rate_off,
-                endpoint_assignment)
+                proportion_on,
+                blink_state)
         log_likelihoods.append(log_likelihood)
 
     # report the log likelihood
@@ -239,56 +199,6 @@ def get_primary_log_likelihood(distn, dg, path_history):
     # return the log likelihood
     return log_likelihood
 
-
-def get_blink_rate_parameters(args):
-    """
-    Construct and validate blinking process parameters from the cmdline args.
-    @param args: command line args
-    @return: rate_off, rate_on, p_off, p_on
-    """
-    blink_rate_args = (args.rate_on, args.rate_off, args.proportion_on)
-    if blink_rate_args.count(None) != 1:
-        raise argparse.ArgumentError(
-                'please specify exactly two of '
-                '{rate-on, rate-off, proportion-on}')
-
-    if args.rate_on is None and args.rate_off is None:
-
-        raise argparse.ArgumentError(
-                'either rate-on or rate-off must be specified')
-    if None not in blink_rate_args:
-        raise argparse.ArgumentError(
-                'please specify exactly two of '
-                '{rate-on, rate-off, proportion-on}')
-    if args.proportion_on is None:
-        if args.rate_on is None or args.rate_off is None:
-            raise argparse.ArgumentError(
-        else:
-            rate_on = args.rate_on
-            rate_off = args.rate_on
-            p_on = rate_on / (rate_on + rate_off)
-            p_off = 1 - p_on
-    else:
-        p_on = args.proportion_on
-        p_off = 1 - p_on
-        if args.rate_on is None and args.rate_off is not None:
-            rate_off = args.rate_off
-            if not p_off:
-                raise NotImplementedError
-            rate_on = (p_on * rate_off) / p_off
-        elif args.rate_on is not None and args.rate_off is None:
-            rate_on = args.rate_on
-            if not p_on:
-                raise NotImplementedError
-            rate_off = (rate_on * p_off) / p_on
-        else:
-
-
-
-        if args.rate_on == float('Inf') and args.rate_off == float('Inf'):
-            proportion_on = args.proportion_on
-        else:
-            raise NotImplementedError
 
 def main(args):
 
@@ -328,35 +238,18 @@ def main(args):
     for part in range(nparts):
         log_likelihood += get_blink_thread_log_likelihood(
                 part, partition, distn, dg, path_history,
-                args.rate_on, args.rate_off)
+                args.proportion_on)
 
     # report the likelihood
     print 'log likelihood:', log_likelihood
     print 'likelihood:', math.exp(log_likelihood)
 
 
-
 if __name__ == '__main__':
-
-    # define some methods
-    method_choices = (
-            'brute',
-            'dynamic',
-            )
-
-    # define the command line parameters
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--rate-on',
-            type=cmedbutil.nonneg_float,
-            help='rate at which blink states change from off to on')
-    parser.add_argument('--rate-off',
-            type=cmedbutil.nonneg_float,
-            help='rate at which blink states change from on to off')
     parser.add_argument('--proportion-on',
             type=cmedbutil.prob_float,
-            help='on/(on+off) proportion, useful with an Inf rate')
-    parser.add_argument('--method', choices=method_choices, default='brute',
-            help='method of integrating over hidden blink states')
+            help='on/(on+off) proportion')
     parser.add_argument('--path-history', default='path.history.db',
             help='input path history as an sqlite3 database file')
     parser.add_argument('--rates', default='rate.matrix.db',

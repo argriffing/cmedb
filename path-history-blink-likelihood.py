@@ -49,8 +49,6 @@ import scipy.linalg
 import cmedbutil
 
 
-class BlinkProportionError(Exception): pass
-
 
 def get_micro_rate_matrix(rate_off, rate_on, rate_absorb):
     """

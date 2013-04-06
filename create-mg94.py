@@ -80,9 +80,10 @@ def main(args):
 
     # rescale the rate matrix to taste
     if args.expected_rate is not None:
-        Q = Q / (expected_syn_rate + expected_nonsyn_rate)
+        expected_rate = expected_syn_rate + expected_nonsyn_rate
+        Q *= args.expected_rate / expected_rate
     elif args.expected_syn_rate is not None:
-        Q = Q / expected_syn_rate
+        Q *= args.expected_syn_rate / expected_syn_rate
     else:
         raise Exception
 
