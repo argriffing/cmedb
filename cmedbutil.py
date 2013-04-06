@@ -53,6 +53,13 @@ def pos_float(x):
                 'value must be a positive floating point number')
     return x
 
+def prob_float(x):
+    x = float(x)
+    if not (0 <= x <= 1):
+        raise argparse.ArgumentTypeError(
+                'value must be in the closed interval [0, 1]')
+    return x
+
 
 ###############################################################################
 # Validation of invariants related to stochastic processes.

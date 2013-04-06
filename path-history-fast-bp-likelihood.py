@@ -1,39 +1,11 @@
 """
-Compute blinking process path history likelihood.
+Compute fast blinking process path history likelihood.
 
-The process is assumed to consist of two simultaneously evolving components.
-The primary component is assumed to be observable,
-and the marginal process of this component
-is a Markov modulated continuous-time process.
-The secondary component is assumed to not be observable,
-and it consists of multiple Markov-modulated marginal processes.
-This script tries to compute the history likelihood
-by integrating over the unobserved process.
-This will involve using dynamic programming to compute
-the likelihood for a discrete-time finite-state
-inhomogeneous hidden Markov model.
-.
-Compute a partially observed path history likelihood.
-This is a complicated script involving Markov modulation.
-An observable genetic history is evolving along a path,
-and we assume that we know its state at every point along this path.
-In other words,
-we know its state at the beginning of the path and
-we know each time that its state changes.
-If this observable genetic history were to have evolved according to a
-continuous-time Markov process, then computing the path history likelihood
-would be fairly straightforward.
-On the other hand,
-in this script we assume that the observable genetic history evolves
-according to a Markov modulated continuous-time process
-for which the modulating states are hidden.
-.
-The following command can be used to sample codon.path.history.db.
-$ python ctmc-segment-bridge-sampling.py
---rates=codon.rate.matrix.db --method=modified-rejection
---outfile=codon.path.history.db --nsamples=1 --table=history --elapsed=10
---initial=0 --final=60
+This is a fast-blinking limit,
+but the blinked-on proportion is still meaningfully defined.
 """
+
+#XXX this has the effect of just reducing nonsynonymous rate
 
 import argparse
 import sqlite3
@@ -150,21 +122,13 @@ def get_partially_observed_blink_thread_log_likelihood(
     # init the path log likelihood
     finite_path_ll = 0.0
 
-    # slowly and inefficiently get the first primary state
-    seg_seq, primary_state_seq, duration_seq = zip(*path_history)
-    initial_primary_state = primary_state_seq[0]
-
     # The initial state contributes to the likelihood.
-    if partition[initial_primary_state] == part:
-        if not endpoint_assignment[0]:
-            return -float('Inf')
-    else:
-        blink_distn = np.array([
-            rate_off / float(rate_on + rate_off),
-            rate_on / float(rate_on + rate_off),
-            ], dtype=float)
-        log_blink_distn = np.log(blink_distn)
-        finite_path_ll += log_blink_distn[endpoint_assignment[0]]
+    blink_distn = np.array([
+        rate_off / float(rate_on + rate_off),
+        rate_on / float(rate_on + rate_off),
+        ], dtype=float)
+    log_blink_distn = np.log(blink_distn)
+    finite_path_ll += log_blink_distn[endpoint_assignment[0]]
 
     # multiply the likelihood across all segments along the thread
     for i in range(nsegments):
@@ -276,13 +240,57 @@ def get_primary_log_likelihood(distn, dg, path_history):
     return log_likelihood
 
 
-def main(args):
+def get_blink_rate_parameters(args):
+    """
+    Construct and validate blinking process parameters from the cmdline args.
+    @param args: command line args
+    @return: rate_off, rate_on, p_off, p_on
+    """
+    blink_rate_args = (args.rate_on, args.rate_off, args.proportion_on)
+    if blink_rate_args.count(None) != 1:
+        raise argparse.ArgumentError(
+                'please specify exactly two of '
+                '{rate-on, rate-off, proportion-on}')
 
-    # check blink rates
-    if (args.rate_on + args.rate_off) in (0, float('Inf')):
-        raise NotImplementedError(
-                'for extreme limits of blinking rates, '
-                'use a different script to compute the likelihood')
+    if args.rate_on is None and args.rate_off is None:
+
+        raise argparse.ArgumentError(
+                'either rate-on or rate-off must be specified')
+    if None not in blink_rate_args:
+        raise argparse.ArgumentError(
+                'please specify exactly two of '
+                '{rate-on, rate-off, proportion-on}')
+    if args.proportion_on is None:
+        if args.rate_on is None or args.rate_off is None:
+            raise argparse.ArgumentError(
+        else:
+            rate_on = args.rate_on
+            rate_off = args.rate_on
+            p_on = rate_on / (rate_on + rate_off)
+            p_off = 1 - p_on
+    else:
+        p_on = args.proportion_on
+        p_off = 1 - p_on
+        if args.rate_on is None and args.rate_off is not None:
+            rate_off = args.rate_off
+            if not p_off:
+                raise NotImplementedError
+            rate_on = (p_on * rate_off) / p_off
+        elif args.rate_on is not None and args.rate_off is None:
+            rate_on = args.rate_on
+            if not p_on:
+                raise NotImplementedError
+            rate_off = (rate_on * p_off) / p_on
+        else:
+
+
+
+        if args.rate_on == float('Inf') and args.rate_off == float('Inf'):
+            proportion_on = args.proportion_on
+        else:
+            raise NotImplementedError
+
+def main(args):
 
     # read the sparse rate matrix from a database file
     conn = sqlite3.connect(args.rates)
@@ -344,6 +352,9 @@ if __name__ == '__main__':
     parser.add_argument('--rate-off',
             type=cmedbutil.nonneg_float,
             help='rate at which blink states change from on to off')
+    parser.add_argument('--proportion-on',
+            type=cmedbutil.prob_float,
+            help='on/(on+off) proportion, useful with an Inf rate')
     parser.add_argument('--method', choices=method_choices, default='brute',
             help='method of integrating over hidden blink states')
     parser.add_argument('--path-history', default='path.history.db',

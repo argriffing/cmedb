@@ -65,10 +65,26 @@ def main(args):
         pre_distn[i] = np.prod([nt_prob_map[nt] for nt in codon])
     distn = pre_distn / np.sum(pre_distn)
 
-    # rescale the rate matrix to have one expected substitution per time unit
-    rates = -np.diag(Q)
-    expectation = np.dot(distn, rates)
-    Q = Q / expectation
+    # compute the expected syn and nonsyn rates for rescaling
+    expected_syn_rate = 0.0
+    expected_nonsyn_rate = 0.0
+    for a, (state_a, residue_a, codon_a) in enumerate(genetic_code):
+        for b, (state_b, residue_b, codon_b) in enumerate(genetic_code):
+            if hamming_distance(codon_a, codon_b) != 1:
+                continue
+            rate = distn[a] * Q[a, b]
+            if residue_a == residue_b:
+                expected_syn_rate += rate
+            else:
+                expected_nonsyn_rate += rate
+
+    # rescale the rate matrix to taste
+    if args.expected_rate is not None:
+        Q = Q / (expected_syn_rate + expected_nonsyn_rate)
+    elif args.expected_syn_rate is not None:
+        Q = Q / expected_syn_rate
+    else:
+        raise Exception
 
     # check time-reversible rate matrix invariants
     cmedbutil.assert_stochastic_vector(distn)
@@ -125,15 +141,19 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('-A', default=0.25, type=cmedbutil.pos_float,
+    parser.add_argument('-A', default=0.25,
+            type=cmedbutil.pos_float,
             help='mutational equilibrium probability of nucleotide A')
-    parser.add_argument('-C', default=0.25, type=cmedbutil.pos_float,
+    parser.add_argument('-C', default=0.25,
+            type=cmedbutil.pos_float,
             help='mutational equilibrium probability of nucleotide C')
-    parser.add_argument('-G', default=0.25, type=cmedbutil.pos_float,
+    parser.add_argument('-G', default=0.25,
+            type=cmedbutil.pos_float,
             help='mutational equilibrium probability of nucleotide G')
-    parser.add_argument('-T', default=0.25, type=cmedbutil.pos_float,
+    parser.add_argument('-T', default=0.25,
+            type=cmedbutil.pos_float,
             help='mutational equilibrium probability of nucleotide T')
-    parser.add_argument('-k', '--kappa', default=2.0, 
+    parser.add_argument('-k', '--kappa', default=2.0,
             type=cmedbutil.pos_float,
             help='transition/transversion ratio')
     parser.add_argument('-w', '--omega', default=0.05,
@@ -143,5 +163,10 @@ if __name__ == '__main__':
             help='input genetic code in sqlite3 format')
     parser.add_argument('--outfile', default='codon.rate.matrix.db',
             help='output rate matrix in sqlite3 format')
+    scaling = parser.add_mutually_exclusive_group(required=True)
+    scaling.add_argument('--expected-rate', type=cmedbutil.pos_float,
+            help='rescale to this expected substitution rate')
+    scaling.add_argument('--expected-syn-rate', type=cmedbutil.pos_float,
+            help='rescale to this expected synonymous substitution rate')
     main(parser.parse_args())
 
