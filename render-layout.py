@@ -136,7 +136,7 @@ if __name__ == '__main__':
             help='isostate segmentation as an sqlite3 database file')
     #parser.add_argument('--imageformat', choices=('png', 'svg', 'pdf'),
             #help='choose among image formats')
-    parser.add_argument('-o', '--outfile', default='out.png',
-            help='create this image file')
+    #parser.add_argument('-o', '--outfile', default='out.png',
+            #help='create this image file')
     main(parser.parse_args())
 
