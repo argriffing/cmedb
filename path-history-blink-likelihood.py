@@ -49,7 +49,6 @@ import scipy.linalg
 import cmedbutil
 
 
-
 def get_micro_rate_matrix(rate_off, rate_on, rate_absorb):
     """
     The micro state order is ('off', 'on', 'absorbed').
@@ -217,6 +216,7 @@ def get_blink_thread_log_likelihood(
         part, partition, distn, dg, path_history,
         rate_on, rate_off):
     """
+    This is for brute force calculation.
     @param part: the part of the partition defining the current blink thred
     @param partition: a map from primary state to part
     @param distn: map from primary state to equilibrium probability
@@ -244,6 +244,92 @@ def get_blink_thread_log_likelihood(
 
     # report the log likelihood
     return scipy.misc.logsumexp(log_likelihoods)
+
+
+def get_dynamic_blink_thread_log_likelihood(
+        part, partition, distn, dg, path_history,
+        rate_on, rate_off):
+    """
+    This uses more-clever-than-brute force likelihood calculation.
+    In particular it uses dynamic programming or memoization or whatever.
+    @param part: the part of the partition defining the current blink thred
+    @param partition: a map from primary state to part
+    @param distn: map from primary state to equilibrium probability
+    @param dg: sparse primary state rate matrix as weighted directed networkx
+    @param path_history: triples of (segment, state, blen)
+    @param rate_on: a blink rate
+    @param rate_off: a blink rate
+    @return: log likelihood
+    """
+
+    # count the number of segments and the number of segment endpoints
+    nsegments = len(path_history)
+    npoints = nsegments + 1
+
+    # initialize the likelihood
+    log_likelihoods = []
+
+    # At each interesting point,
+    # compute the likelihood of the remaining path for (conditional on)
+    # each of the two possible current blink states.
+    lk_table = np.zeros((npoints, 2), dtype=float)
+    lk_table[-1] = 1
+    for segment_index in reversed(range(nsegments)):
+        segment, primary_state, duration = path_history[segment_index]
+
+        # Get the conditional rate of turning off the blinking.
+        # This is zero if the primary state corresponds to the
+        # blink thread state, and otherwise it is rate_off.
+        if partition[primary_state] == part:
+            conditional_rate_off = 0.0
+        else:
+            conditional_rate_off = rate_off
+
+        # Get the conditional rate of turning on the blinking.
+        # This is always rate_on.
+        conditional_rate_on = rate_on
+
+        # Get the absorption rate.
+        # This is the sum of primary transition rates
+        # into the part that corresponds to the current blink thread state.
+        rate_absorb = 0.0
+        for sink in dg.successors(primary_state):
+            rate = dg[primary_state][sink]['weight']
+            if partition[sink] == part:
+                rate_absorb += rate
+
+        # Construct the micro rate matrix and transition matrix.
+        Q_micro = get_micro_rate_matrix(
+                conditional_rate_off, conditional_rate_on, rate_absorb)
+        P_micro = scipy.linalg.expm(Q_micro * duration)
+
+        # Get the likelihood using the table.
+        for ba, bb in product((0, 1), repeat=2):
+            lk_transition = 1.0
+            if partition[primary_state] == part:
+                if not (ba and bb):
+                    lk_transition *= 0.0
+            lk_transition *= P_micro[ba, bb]
+            lk_rest = lk_table[segment_index+1, bb]
+            lk_table[segment_index, ba] += lk_transition * lk_rest
+
+    # slowly and inefficiently get the first primary state
+    seg_seq, primary_state_seq, duration_seq = zip(*path_history)
+    initial_primary_state = primary_state_seq[0]
+
+    # The initial distribution contributes to the likelihood.
+    if partition[initial_primary_state] == part:
+        initial_proportion_off = 0.0
+        initial_proportion_on = 1.0
+    else:
+        initial_proportion_off = rate_off / float(rate_on + rate_off)
+        initial_proportion_on = rate_on / float(rate_on + rate_off)
+    path_likelihood = 0.0
+    path_likelihood += initial_proportion_off * lk_table[0, 0]
+    path_likelihood += initial_proportion_on * lk_table[0, 1]
+
+    # Report the log likelihood.
+    return math.log(path_likelihood)
 
 
 def get_primary_log_likelihood(distn, dg, path_history):
@@ -315,8 +401,14 @@ def main(args):
     log_likelihood += get_primary_log_likelihood(distn, dg, path_history)
 
     # add log likelihood blink thread log likelihood contributions
+    if args.method == 'brute':
+        blink_fn = get_blink_thread_log_likelihood
+    elif args.method == 'dynamic':
+        blink_fn = get_dynamic_blink_thread_log_likelihood
+    else:
+        raise Exception
     for part in range(nparts):
-        log_likelihood += get_blink_thread_log_likelihood(
+        log_likelihood += blink_fn(
                 part, partition, distn, dg, path_history,
                 args.rate_on, args.rate_off)
 
