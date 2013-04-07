@@ -13,44 +13,7 @@ import itertools
 import numpy as np
 import scipy.linalg
 
-
-#XXX this should go into a separate module
-def pos_float(x):
-    x = float(x)
-    if x <= 0:
-        raise argparse.ArgumentTypeError(
-                'value must be a positive floating point number')
-    return x
-
-#XXX this should go into a separate module
-def assert_stochastic_vector(v):
-    if np.any(v < 0) or np.any(1 < v):
-        raise Exception(
-                'entries of a finite distribution vector should be in '
-                'the inclusive interval [0, 1]')
-    if not np.allclose(np.sum(v), 1):
-        raise Exception(
-                'entries of a finite distribution vector should sum to 1')
-
-#XXX this should go into a separate module
-def assert_rate_matrix(Q):
-    if not np.allclose(np.sum(Q, axis=1), 0):
-        raise Exception('expected rate matrix rows to sum to zero')
-    if np.any(np.diag(Q) > 0):
-        raise Exception('expected rate matrix diagonals to be non-positive')
-    if np.any(Q - np.diag(np.diag(Q)) < 0):
-        raise Exception('expected rate matrix off-diagonals to be non-negative')
-
-#XXX this should go into a separate module
-def assert_equilibrium(Q, distn):
-    if not np.allclose(np.dot(distn, Q), 0):
-        raise Exception('the distribution is not at equilibrium')
-
-#XXX this should go into a separate module
-def assert_detailed_balance(Q, distn):
-    S = (Q.T * distn).T
-    if not np.allclose(S, S.T):
-        raise Exception('the detailed balance equations are not met')
+import cmedbutil
 
 
 def get_rate_matrix_info(cursor):
@@ -92,16 +55,16 @@ def get_rate_matrix_info(cursor):
         distn[s_to_i[state]] = prob
 
     # assert that the distribution has the right form
-    assert_stochastic_vector(distn)
+    cmedbutil.assert_stochastic_vector(distn)
 
     # assert that the rate matrix is actually a rate matrix
-    assert_rate_matrix(Q)
+    cmedbutil.assert_rate_matrix(Q)
 
     # assert that the distribution is at equilibrium w.r.t. the rate matrix
-    assert_equilibrium(Q, distn)
+    cmedbutil.assert_equilibrium(Q, distn)
 
     # assert that the detailed balance equations are met
-    assert_detailed_balance(Q, distn)
+    cmedbutil.assert_detailed_balance(Q, distn)
 
     # return the validated inputs describing the stochastic process
     return states, distn, Q
@@ -151,7 +114,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--elapsed', type=pos_float, default=1.0,
+    parser.add_argument('--elapsed', type=cmedbutil.pos_float, default=1.0,
             help='elapsed time')
     parser.add_argument('--rates', default='rate.matrix.db',
             help='time-reversible rate matrix as an sqlite3 database file')
