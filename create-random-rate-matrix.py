@@ -38,7 +38,7 @@ def main(args):
     cmedbutil.assert_detailed_balance(Q, distn)
 
     # create or open the database for output
-    conn = sqlite3.connect('random.rate.matrix.db')
+    conn = sqlite3.connect(args.outfile)
     cursor = conn.cursor()
 
     # create the tables
@@ -90,5 +90,7 @@ if __name__ == '__main__':
     parser.add_argument('--expected-rate', default=1.0,
             type=cmedbutil.pos_float,
             help='expected substitutions per time unit')
+    parser.add_argument('--outfile', default='random.rate.matrix.db',
+            help='output rate matrix in sqlite3 format')
     main(parser.parse_args())
 
