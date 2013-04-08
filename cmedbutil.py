@@ -68,7 +68,8 @@ def assert_stochastic_vector(v):
     if np.any(v < 0) or np.any(1 < v):
         raise Exception(
                 'entries of a finite distribution vector should be in '
-                'the inclusive interval [0, 1]')
+                'the inclusive interval [0, 1] '
+                'min: %s  max: %s' % (min(v), max(v)))
     if not np.allclose(np.sum(v), 1):
         raise Exception(
                 'entries of a finite distribution vector should sum to 1')

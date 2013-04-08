@@ -25,9 +25,6 @@ $ python create-random-rate-matrix.py
 --nstates=8 --outfile=toy.rate.matrix.db
 $ python bp-random-state-partition.py
 --outfile=toy.partition.db --nparts=4 --rates=toy.rate.matrix.db
-$ python bp-endpoint-probability.py
---rate-on=1.0 --rate-off=3 --elapsed=5 --initial=0 --final=7
---rates=toy.rate.matrix.db --partition=toy.partition.db
 $ python ctmc-segment-bridge-sampling.py
 --initial=0 --final=7 --method=modified-rejection --elapsed=5
 --rates=toy.rate.matrix.db --nsamples=100 --table=histories
@@ -42,6 +39,11 @@ $ python path-histories-likelihoods.py
 $ python monte-carlo-likelihood-ratio.py
 --numerator-log-likelihood=toy.blink.log.likelihoods.db
 --denominator-log-likelihood=toy.reference.log.likelihoods.db 
+$ python ctmc-endpoint-probability.py
+--elapsed=5 --initial=0 --final=7 --rates=toy.rate.matrix.db
+$ python bp-endpoint-probability.py
+--elapsed=5 --initial=0 --final=7 --rates=toy.rate.matrix.db
+--partition=toy.partition.db --rate-on=1 --rate-off=3
 """
 
 import argparse
@@ -61,6 +63,11 @@ import cmedbutil
 
 def hamming_distance(a, b):
     return sum(1 for x, y in zip(a, b) if x != y)
+
+def index_of_first_difference(a, b):
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return i
 
 
 #XXX copypasted
@@ -172,8 +179,15 @@ def create_compound_rate_matrix(rate_off, rate_on, partition, distn, dg):
             pri_j = compound_to_primary[j]
             blink_j = compound_to_blink[j]
 
+            # precompute the number of blink transitions
+            blink_hdist = hamming_distance(blink_i, blink_j)
+
+            # we do not allow multiple simultaneous blink transitions
+            if blink_hdist > 1:
+                continue
+
             # simultaneous primary and blink state changes are not allowed
-            if pri_i != pri_j and blink_i != blink_j:
+            if pri_i != pri_j and blink_hdist == 1:
                 continue
 
             # get the primary state partitions
@@ -198,16 +212,20 @@ def create_compound_rate_matrix(rate_off, rate_on, partition, distn, dg):
                     pre_Q[i, j] = rate
 
             # check for single blink state transition
-            if hamming_distance(blink_i, blink_j) == 1:
+            if blink_hdist == 1:
 
-                # get the blink difference
+                # get the blink difference and part
                 diff = sum(b-a for a, b in zip(blink_i, blink_j))
+                blink_part = index_of_first_difference(blink_i, blink_j)
 
                 # set the compound state transition rate
                 if diff == 1:
                     rate = rate_on
                 elif diff == -1:
-                    rate = rate_off
+                    if blink_part == part_i:
+                        rate = 0
+                    else:
+                        rate = rate_off
                 else:
                     raise Exception
                 pre_Q[i, j] = rate
@@ -252,11 +270,8 @@ def main(args):
     compound_to_primary, compound_to_blink, Q = create_compound_rate_matrix(
             args.rate_off, args.rate_on, partition, distn, dg)
 
-    # compute compound matrix exponential
-    P = scipy.linalg.expm(args.elapsed * Q)
-
     # compute compound equilibrium distribution
-    compound_distn = {}
+    compound_distn = np.zeros(ncompound, dtype=float)
     blink_distn = np.array([
         args.rate_off / (args.rate_on + args.rate_off),
         args.rate_on / (args.rate_on + args.rate_off),
@@ -274,6 +289,15 @@ def main(args):
                 prob *= blink_distn[blink_state]
         compound_distn[i] = prob
 
+    # check the rate matrix and the distribution
+    cmedbutil.assert_stochastic_vector(compound_distn)
+    cmedbutil.assert_rate_matrix(Q)
+    cmedbutil.assert_equilibrium(Q, compound_distn)
+    cmedbutil.assert_detailed_balance(Q, compound_distn)
+
+    # compute compound matrix exponential
+    P = scipy.linalg.expm(args.elapsed * Q)
+
     # Compute the joint probability of the initial and final primary states.
     joint_prob = 0.0
     for i in range(ncompound):
@@ -283,8 +307,10 @@ def main(args):
             if pri_i == args.initial and pri_j == args.final:
                 joint_prob += compound_distn[i] * P[i, j]
 
-    # Report the joint probability.
-    print joint_prob
+    # report the joint probability
+    print 'joint log probability:', math.log(joint_prob)
+    print 'joint probability:', joint_prob
+
 
 
 if __name__ == '__main__':

@@ -6,6 +6,9 @@ import argparse
 import math
 import sqlite3
 
+import numpy as np
+
+
 def main(args):
 
     # define the sql command to read the log likelihoods
@@ -28,17 +31,21 @@ def main(args):
         raise Exception
 
     # get the expected likelihood ratio
+    ratios = []
     history_indices = set(history_to_numerator)
-    nhistories = len(history_indices)
-    accum = 0.0
     for history in history_indices:
         log_num = history_to_numerator[history]
         log_den = history_to_denominator[history]
-        accum += math.exp(log_num - log_den)
-    mclr = accum / nhistories
+        ratio = math.exp(log_num - log_den)
+        ratios.append(ratio)
 
     # report the expected likelihood ratio
-    print 'Monte Carlo likelihood ratio:', mclr
+    nratios = len(ratios)
+    mu = np.mean(ratios)
+    err = np.std(ratios) / math.sqrt(nratios)
+    print 'number of samples:', nratios
+    print 'Monte Carlo likelihood ratio mean:', np.mean(ratios)
+    print 'Monte Carlo likelihood ratio standard error:', err
 
 
 if __name__ == '__main__':
