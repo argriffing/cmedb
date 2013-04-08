@@ -20,6 +20,7 @@ then the MCLR implementation would presumably not be buggy and
 could be used for inference with non-toy genetic codes.
 .
 Test using a toy rate matrix with random partitions.
+Possibly turn this into a makefile for testing purposes.
 $ python create-random-rate-matrix.py
 --nstates=8 --outfile=toy.rate.matrix.db
 $ python bp-random-state-partition.py
@@ -27,6 +28,10 @@ $ python bp-random-state-partition.py
 $ python bp-endpoint-probability.py
 --rate-on=1.0 --rate-off=3 --elapsed=5 --initial=0 --final=7
 --rates=toy.rate.matrix.db --partition=toy.partition.db
+$ python ctmc-segment-bridge-sampling.py
+--initial=0 --final=7 --method=modified-rejection --elapsed=5
+--rates=toy.rate.matrix.db --nsamples=100 --table=histories
+--outfile=toy.histories.db
 """
 
 import argparse

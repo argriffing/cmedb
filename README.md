@@ -147,3 +147,13 @@ full history sample of a complicated reversible Markov process on a path:
     CREATE TABLE primary_history (segment integer, state integer, duration real, primary key (segment));
     sqlite> 
 
+log likelihoods under a model, for multiple path histories:
+
+    $ sqlite3 log.likelihoods.db 
+    SQLite version 3.7.13 2012-06-11 02:05:22
+    Enter ".help" for instructions
+    Enter SQL statements terminated with a ";"
+    sqlite> .schema
+    CREATE TABLE log_likelihoods (history integer, log_likelihood real, primary key (history));
+    sqlite> 
+
