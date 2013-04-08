@@ -18,32 +18,6 @@ If Monte Carlo likelihood ratio estimation seems to converge to the
 exact likelihood ratios for small artificial genetic codes,
 then the MCLR implementation would presumably not be buggy and
 could be used for inference with non-toy genetic codes.
-.
-Test using a toy rate matrix with random partitions.
-Possibly turn this into a makefile for testing purposes.
-$ python create-random-rate-matrix.py
---nstates=8 --outfile=toy.rate.matrix.db
-$ python bp-random-state-partition.py
---outfile=toy.partition.db --nparts=4 --rates=toy.rate.matrix.db
-$ python ctmc-segment-bridge-sampling.py
---initial=0 --final=7 --method=modified-rejection --elapsed=5
---rates=toy.rate.matrix.db --nsamples=100 --table=histories
---outfile=toy.histories.db
-$ python path-histories-blink-likelihoods.py
---rates=toy.rate.matrix.db --histories=toy.histories.db
---rate-on=1 --rate-off=3 --partition=toy.partition.db
---outfile=toy.blink.log.likelihoods.db
-$ python path-histories-likelihoods.py
---rates=toy.rate.matrix.db --histories=toy.histories.db
---outfile=toy.reference.log.likelihoods.db
-$ python monte-carlo-likelihood-ratio.py
---numerator-log-likelihood=toy.blink.log.likelihoods.db
---denominator-log-likelihood=toy.reference.log.likelihoods.db 
-$ python ctmc-endpoint-probability.py
---elapsed=5 --initial=0 --final=7 --rates=toy.rate.matrix.db
-$ python bp-endpoint-probability.py
---elapsed=5 --initial=0 --final=7 --rates=toy.rate.matrix.db
---partition=toy.partition.db --rate-on=1 --rate-off=3
 """
 
 import argparse
