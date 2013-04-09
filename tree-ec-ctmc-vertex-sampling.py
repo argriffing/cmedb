@@ -10,9 +10,17 @@ whereas the output alignment
 does not pay attention pattern distinctness or multiplicity.
 Also the leaf state alignment is unnecessarily
 duplicated in the output alignment.
+The ec in the script name refers to "endpoint conditioned"
+which means "leaf conditioned" in the case of a tree.
+More generally it is "boundary conditioned."
+The ctmc in the script name refers to "continuous time Markov chain."
+This script in particular assumes that the Markov chain is time-reversible.
 """
 
-#XXX obviously not finished
+# An experimental way to organize scripts,
+# possibly to be used with galaxy.
+g_tags = {'tree', 'sampling', 'ctmc', 'reversible'}
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
