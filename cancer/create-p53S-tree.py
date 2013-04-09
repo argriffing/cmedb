@@ -22,10 +22,6 @@ def main():
     nodes = list(t.postorder_node_iter())
     non_leaves = [n for n in nodes if n not in leaves]
     ordered_nodes = leaves + non_leaves
-    print len(leaves)
-    print len(ordered_nodes)
-    for node in ordered_nodes:
-        print node.taxon
 
     # node index lookup
     node_id_to_index = dict((id(n), i) for i, n in enumerate(ordered_nodes))
