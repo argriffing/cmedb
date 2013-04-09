@@ -115,7 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('--infile', required=True,
             help='input phylip file')
     parser.add_argument('--code', default='universal.code.db',
-            help='output alignment patterns as an sqlite3 database file')
+            help='genetic code as an sqlite3 database file')
     parser.add_argument('--tree', default='p53S.tree.db',
             help='input tree for leaf taxon matching')
     parser.add_argument('--outfile', default='alignment.db',
