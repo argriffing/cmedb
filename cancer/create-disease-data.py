@@ -100,6 +100,6 @@ if __name__ == '__main__':
     parser.add_argument('--code', default='universal.code.db',
             help='genetic code as an sqlite3 database file')
     parser.add_argument('--outfile', default='tumor.db',
-            help='output codon alignment as an sqlite3 database file')
+            help='output disease data as an sqlite3 database file')
     main(parser.parse_args())
 
