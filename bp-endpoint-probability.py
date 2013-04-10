@@ -285,10 +285,17 @@ def main(args):
     print 'joint log probability:', math.log(joint_prob)
     print 'joint probability:', joint_prob
 
+    # if in a spammy mood, report the compound equilibrium distribution
+    if args.verbose:
+        print 'equilibrium distribution:'
+        print compound_distn
+
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('-v', '--verbose', action='store_true',
+            help='spam more text')
     parser.add_argument('--rate-on',
             type=cmedbutil.nonneg_float,
             help='rate at which blink states change from off to on')

@@ -36,11 +36,25 @@ def main(args):
     conn.commit()
 
     # write the partition information into the table
+    mu = 1.0
+    rate_on = random.expovariate(1 / mu)
+    rate_off = random.expovariate(1 / mu)
     for part in parts:
-        mu = 1.0
         s = 'insert into rates values (?, ?, ?)'
-        rate_on = random.expovariate(1 / mu)
-        rate_off = random.expovariate(1 / mu)
+        
+        # define the rate on
+        if args.rate_on is not None:
+            rate_on = args.rate_on
+        elif not args.shared_rates:
+            rate_on = random.expovariate(1 / mu)
+
+        # define the rate off
+        if args.rate_off is not None:
+            rate_off = args.rate_off
+        elif not args.shared_rates:
+            rate_off = random.expovariate(1 / mu)
+
+        # add a row to the database
         t = (part, rate_on, rate_off)
         cursor.execute(s, t)
     conn.commit()
@@ -56,5 +70,11 @@ if __name__ == '__main__':
                 'as an sqlite3 database file'))
     parser.add_argument('--outfile', default='blink.rates.db',
             help='create this sqlite3 database file')
+    parser.add_argument('--shared-rates', action='store_true',
+            help='all blink states share the same rates')
+    parser.add_argument('--rate-on', type=cmedbutil.nonneg_float,
+            help='use a fixed blink rate on')
+    parser.add_argument('--rate-off', type=cmedbutil.nonneg_float,
+            help='use a fixed blink rate off')
     main(parser.parse_args())
 

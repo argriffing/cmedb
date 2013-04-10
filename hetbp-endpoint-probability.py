@@ -246,13 +246,14 @@ def main(args):
             partition, distn, dg)
 
     # adjust the primary distribution according to the varying blink rates
-    adjusted_distn = dict(distn)
-    for part in parts:
+    adjusted_distn = {}
+    for primary, prob in distn.items():
+        part = partition[primary]
         rate_on = part_to_rate_on[part]
         rate_off = part_to_rate_off[part]
-        adjusted_distn[part] *= rate_on / (rate_on + rate_off)
+        adjusted_distn[primary] = prob * rate_on / (rate_on + rate_off)
     total = sum(adjusted_distn.values())
-    adjusted_distn = dict((part, p/total) for part, p in adjusted_distn.items())
+    adjusted_distn = dict((pri, p/total) for pri, p in adjusted_distn.items())
 
     # compute compound equilibrium distribution
     compound_distn = np.zeros(ncompound, dtype=float)
@@ -278,6 +279,11 @@ def main(args):
                 prob *= blink_distn[blink_state]
         compound_distn[i] = prob
 
+    # if in a spammy mood, report the compound equilibrium distribution
+    if args.verbose:
+        print 'equilibrium distribution:'
+        print compound_distn
+
     # check the rate matrix and the distribution
     cmedbutil.assert_stochastic_vector(compound_distn)
     cmedbutil.assert_rate_matrix(Q)
@@ -301,9 +307,10 @@ def main(args):
     print 'joint probability:', joint_prob
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('-v', '--verbose', action='store_true',
+            help='spam more text')
     parser.add_argument('--initial', type=cmedbutil.nonneg_int, required=True,
             help='initial state')
     parser.add_argument('--final', type=cmedbutil.nonneg_int, required=True,
