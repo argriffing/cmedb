@@ -157,3 +157,8 @@ log likelihoods under a model, for multiple path histories:
     CREATE TABLE log_likelihoods (history integer, log_likelihood real, primary key (history));
     sqlite> 
 
+p53 tumor data:
+
+    $ echo ".schema" | sqlite3 cancer/tumor.db 
+    CREATE TABLE tumor (offset integer, wild_state integer, mutant_state integer, primary key (offset, wild_state, mutant_state));
+
