@@ -8,7 +8,6 @@ to allow a blinking state that enables/disables synonymous substitutions.
 import argparse
 import sqlite3
 import math
-import itertools
 from itertools import permutations
 from itertools import product
 
