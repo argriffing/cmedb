@@ -2,7 +2,8 @@
 Compute syn blink process likelihoods for multiple sampled path histories.
 
 This is copypasted from the analogous script without the syn blink thread.
-This additional blink thread introduced by this script.
+This additional blink thread introduced by this script
+enables/disables synonymous substitutions.
 """
 
 import argparse
@@ -94,6 +95,82 @@ def get_sparse_rate_matrix_info(cursor):
     return distn, dg
 
 
+def get_dynamic_syn_thread_log_likelihood(
+        partition, distn, dg, path_history,
+        syn_rate_on, syn_rate_off):
+    """
+    Account for the blinking thread that controls synonymous substitution.
+    This uses more-clever-than-brute force likelihood calculation.
+    In particular it uses dynamic programming or memoization or whatever.
+    @param part: the part of the partition defining the current blink thred
+    @param partition: a map from primary state to part
+    @param distn: map from primary state to equilibrium probability
+    @param dg: sparse primary state rate matrix as weighted directed networkx
+    @param path_history: triples of (segment, state, blen)
+    @param rate_on: a blink rate
+    @param rate_off: a blink rate
+    @return: log likelihood
+    """
+
+    # count the number of segments and the number of segment endpoints
+    nsegments = len(path_history)
+    npoints = nsegments + 1
+
+    # Mark the points along the path that correspond to
+    # synonymous substitutions.
+    # These are the only points at which the
+    # state of the hidden blinking thread that enables/disables
+    # synonymous substitutions is known.
+    point_is_syn = [False]
+    for seg_info_a, seg_info_b in cmedbutil.pairwise(path_history):
+        seg_a, pri_a, dur_a = seg_info_a
+        seg_b, pri_b, dur_b = seg_info_b
+        syn = (pri_a != pri_b and partition[pri_a] == partition[pri_b])
+        point_is_syn.append(syn)
+
+    # At each interesting point,
+    # compute the likelihood of the remaining path for (conditional on)
+    # each of the two possible current blink states.
+    lk_table = np.zeros((npoints, 2), dtype=float)
+    lk_table[-1] = 1
+    for segment_index in reversed(range(nsegments)):
+        segment, primary_state, duration = path_history[segment_index]
+        primary_part = partition[primary_state]
+
+        # Get the absorption rate.
+        # This is the sum of primary synonymous transition rates.
+        rate_absorb = 0.0
+        for sink in dg.successors(primary_state):
+            rate = dg[primary_state][sink]['weight']
+            if partition[sink] == primary_part:
+                rate_absorb += rate
+
+        # Construct the micro rate matrix and transition matrix.
+        Q_micro = get_micro_rate_matrix(syn_rate_off, syn_rate_on, rate_absorb)
+        P_micro = scipy.linalg.expm(Q_micro * duration)
+
+        # Get the likelihood using the table.
+        for ba, bb in product((0, 1), repeat=2):
+            if point_is_syn[segment_index] and not ba:
+                lk_transition = 0.0
+            elif point_is_syn[segment_index+1] and not bb:
+                lk_transition = 0.0
+            else:
+                lk_transition = P_micro[ba, bb]
+            lk_rest = lk_table[segment_index+1, bb]
+            lk_table[segment_index, ba] += lk_transition * lk_rest
+
+    # The initial distribution contributes to the likelihood.
+    initial_proportion_off = syn_rate_off / float(syn_rate_on + syn_rate_off)
+    initial_proportion_on = syn_rate_on / float(syn_rate_on + syn_rate_off)
+    path_likelihood = 0.0
+    path_likelihood += initial_proportion_off * lk_table[0, 0]
+    path_likelihood += initial_proportion_on * lk_table[0, 1]
+
+    # Report the log likelihood.
+    return math.log(path_likelihood)
+
+
 def get_dynamic_blink_thread_log_likelihood(
         part, partition, distn, dg, path_history,
         rate_on, rate_off):
@@ -113,9 +190,6 @@ def get_dynamic_blink_thread_log_likelihood(
     # count the number of segments and the number of segment endpoints
     nsegments = len(path_history)
     npoints = nsegments + 1
-
-    # initialize the likelihood
-    log_likelihoods = []
 
     # At each interesting point,
     # compute the likelihood of the remaining path for (conditional on)
@@ -152,12 +226,17 @@ def get_dynamic_blink_thread_log_likelihood(
         P_micro = scipy.linalg.expm(Q_micro * duration)
 
         # Get the likelihood using the table.
+        # Note that this has been modified
+        # to push the synonymous substitution log likelihood contribution
+        # into its own blinking thread.
         for ba, bb in product((0, 1), repeat=2):
-            lk_transition = 1.0
             if partition[primary_state] == part:
                 if not (ba and bb):
-                    lk_transition *= 0.0
-            lk_transition *= P_micro[ba, bb]
+                    lk_transition = 0.0
+                else:
+                    lk_transition = 1.0
+            else:
+                lk_transition = P_micro[ba, bb]
             lk_rest = lk_table[segment_index+1, bb]
             lk_table[segment_index, ba] += lk_transition * lk_rest
 
@@ -180,6 +259,7 @@ def get_dynamic_blink_thread_log_likelihood(
     return math.log(path_likelihood)
 
 
+#XXX copypasted
 def get_primary_log_likelihood(distn, dg, path_history):
     """
     This includes the initial state and the transitions.
@@ -258,9 +338,13 @@ def main(args):
 
         # init the log likelihood
         # add primary state log likelihood contributions
+        # add synonymous substitution log likelihood contributions
         # add log likelihood blink thread log likelihood contributions
         log_likelihood = 0.0
         log_likelihood += get_primary_log_likelihood(distn, dg, path_history)
+        log_likelihood += get_dynamic_syn_thread_log_likelihood(
+                    partition, distn, dg, path_history,
+                    args.syn_rate_on, args.syn_rate_off)
         for part in range(nparts):
             log_likelihood += get_dynamic_blink_thread_log_likelihood(
                     part, partition, distn, dg, path_history,
@@ -313,6 +397,14 @@ if __name__ == '__main__':
     parser.add_argument('--partition', default='partition.db',
             help=('a partition of the primary states '
                 'as an sqlite3 database file'))
+
+    # blinking thread parameters for synonymous substitutions
+    parser.add_argument('--syn-rate-on',
+            type=cmedbutil.nonneg_float,
+            help='rate at which syn blink state changes from off to on')
+    parser.add_argument('--syn-rate-off',
+            type=cmedbutil.nonneg_float,
+            help='rate at which syn blink state changes from on to off')
 
     # call the main function
     main(parser.parse_args())
