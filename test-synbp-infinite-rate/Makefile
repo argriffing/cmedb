@@ -43,6 +43,22 @@ limit.log.likelihoods.db: limit.rate.matrix.db histories.db partition.db
 		--rates=limit.rate.matrix.db --histories=histories.db \
 		--outfile=limit.log.likelihoods.db
 
+limit.txt: limit.rate.matrix.db
+	python $(myscripts)/ctmc-endpoint-probability.py \
+		--initial=0 --final=1 --elapsed=5 \
+		--rates=limit.rate.matrix.db \
+		> limit.txt
+
+synbp.txt: plain.rate.matrix.db partition.db
+	python $(myscripts)/synbp-endpoint-probability.py \
+		--initial=0 --final=1 --elapsed=5 \
+		--rates=plain.rate.matrix.db \
+		--partition=partition.db \
+		--rate-on=20000 --rate-off=30000 \
+		--syn-rate-on=10000 --syn-rate-off=30000 \
+		> synbp.txt
+
 clean:
 	rm *.db
+	rm *.txt
 
