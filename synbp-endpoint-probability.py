@@ -20,15 +20,6 @@ import cmedbutil
 
 
 
-def hamming_distance(a, b):
-    return sum(1 for x, y in zip(a, b) if x != y)
-
-def index_of_first_difference(a, b):
-    for i, (x, y) in enumerate(zip(a, b)):
-        if x != y:
-            return i
-
-
 #XXX copypasted
 def get_sparse_rate_matrix_info(cursor):
     """
