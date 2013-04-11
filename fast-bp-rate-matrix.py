@@ -1,90 +1,113 @@
 """
 Construct a fast blinking process limit of an existing rate matrix.
-"""
 
-#XXX copypasted and under construction
+The set of states is assumed to be partitioned.
+The modification of the rate matrix
+involves only reducing some rates and adjusting the distribution.
+"""
 
 import argparse
 import sqlite3
+from itertools import permutations
 
 import numpy as np
-import scipy.linalg
+import networkx as nx
 
 import cmedbutil
+
+
+#XXX copypasted
+def get_sparse_rate_matrix_info(cursor):
+    """
+    This is a non-numpy customization of the usual get_rate_matrix_info.
+    In this function we ignore the 'states' table with the state names,
+    but we care about the sparse rates and the equilibrium distribution.
+    Return a couple of things.
+    The first thing is a map from a state to an equilibrium probability.
+    The second thing is a sparse rate matrix as a networkx weighted digraph.
+    @param cursor: sqlite3 database cursor
+    @return: eq distn, rate graph
+    """
+
+    # get a set of all states
+    cursor.execute(
+            'select state from distn '
+            'union '
+            'select source from rates '
+            'union '
+            'select sink from rates '
+            'union '
+            'select state from states '
+            )
+    states = set(t[0] for t in cursor)
+    nstates = len(states)
+
+    # get the sparse equilibrium distribution
+    cursor.execute('select state, prob from distn')
+    distn = dict(cursor)
+
+    # construct the rate matrix as a networkx weighted directed graph
+    dg = nx.DiGraph()
+    cursor.execute('select source, sink, rate from rates')
+    for a, b, weight in cursor:
+        dg.add_edge(a, b, weight=weight)
+
+    # assert that the distribution has the right form
+    if not all(0 <= p <= 1 for p in distn.values()):
+        raise Exception(
+                'equilibrium probabilities '
+                'should be in the interval [0, 1]')
+    if not np.allclose(sum(distn.values()), 1):
+        raise Exception('equilibrium probabilities should sum to 1')
+
+    # assert that rates are not negative
+    if any(data['weight'] < 0 for a, b, data in dg.edges(data=True)):
+        raise Exception('rates should be non-negative')
+
+    # assert detailed balance
+    for a, b in permutations(states, 2):
+        if b in dg[a] and a in dg[b]:
+            if not np.allclose(
+                    distn[a] * dg[a][b]['weight'],
+                    distn[b] * dg[b][a]['weight'],
+                    ):
+                raise Exception('expected detailed balance')
+
+    # return the eq distn and the rate graph
+    return distn, dg
 
 
 
 def main(args):
 
-    # construct and validate the mutational process equilibrium distribution
-    nt_distn = np.array([args.A, args.C, args.G, args.T])
-    cmedbutil.assert_stochastic_vector(nt_distn)
-    nt_prob_map = {
-            'A' : args.A,
-            'C' : args.C,
-            'G' : args.G,
-            'T' : args.T,
-            }
-
-    # read the genetic code
-    conn = sqlite3.connect(args.code)
+    # Read the sparse rate matrix from a database file.
+    # Also read the state, name pairs for copypasting to the output matrix.
+    conn = sqlite3.connect(args.rates)
     cursor = conn.cursor()
-    cursor.execute(
-        "select state, residue, codon from code "
-        "where residue <> 'Stop' "
-        "order by state")
-    genetic_code = list(cursor)
+    distn, dg = get_sparse_rate_matrix_info(cursor)
+    state_name_pairs = list(cursor.execute('select state, name from states'))
     conn.close()
 
-    # construct the mg94 rate matrix
-    nstates = len(genetic_code)
-    transitions = ('AG', 'GA', 'CT', 'TC')
-    pre_Q = np.zeros((nstates, nstates), dtype=float)
-    for a, (state_a, residue_a, codon_a) in enumerate(genetic_code):
-        for b, (state_b, residue_b, codon_b) in enumerate(genetic_code):
-            if hamming_distance(codon_a, codon_b) != 1:
-                continue
-            for nta, ntb in zip(codon_a, codon_b):
-                if nta != ntb:
-                    rate = nt_prob_map[ntb]
-                    if nta + ntb in transitions:
-                        rate *= args.kappa
-            if residue_a != residue_b:
-                rate *= args.omega
-            pre_Q[a, b] = rate
-    Q = pre_Q - np.diag(np.sum(pre_Q, axis=1))
-    pre_distn = np.empty(nstates, dtype=float)
-    for i, (state, residue, codon) in enumerate(genetic_code):
-        pre_distn[i] = np.prod([nt_prob_map[nt] for nt in codon])
-    distn = pre_distn / np.sum(pre_distn)
+    # Read the partition from a database file.
+    # The hidden blinking process controls the state transition
+    # of the primary process according to this partition
+    # of primary process states.
+    conn = sqlite3.connect(args.partition)
+    cursor = conn.cursor()
+    partition = dict(cursor.execute('select state, part from partition'))
+    conn.close()
 
-    # compute the expected syn and nonsyn rates for rescaling
-    expected_syn_rate = 0.0
-    expected_nonsyn_rate = 0.0
-    for a, (state_a, residue_a, codon_a) in enumerate(genetic_code):
-        for b, (state_b, residue_b, codon_b) in enumerate(genetic_code):
-            if hamming_distance(codon_a, codon_b) != 1:
-                continue
-            rate = distn[a] * Q[a, b]
-            if residue_a == residue_b:
-                expected_syn_rate += rate
+    # adjust the rates
+    for a in dg:
+        for b in dg.successors(a):
+            rate = dg[a][b]['weight']
+            if partition[a] == partition[b]:
+                rate *= args.syn_proportion_on
             else:
-                expected_nonsyn_rate += rate
+                rate *= args.proportion_on
+            dg[a][b]['weight'] = rate
 
-    # rescale the rate matrix to taste
-    if args.expected_rate is not None:
-        expected_rate = expected_syn_rate + expected_nonsyn_rate
-        Q *= args.expected_rate / expected_rate
-    elif args.expected_syn_rate is not None:
-        Q *= args.expected_syn_rate / expected_syn_rate
-    else:
-        raise Exception
-
-    # check time-reversible rate matrix invariants
-    cmedbutil.assert_stochastic_vector(distn)
-    cmedbutil.assert_rate_matrix(Q)
-    cmedbutil.assert_equilibrium(Q, distn)
-    cmedbutil.assert_detailed_balance(Q, distn)
+    # the stationary distribution does not change
 
     # create or open the rate matrix database for writing
     conn = sqlite3.connect(args.outfile)
@@ -105,28 +128,24 @@ def main(args):
             'primary key (state))')
     conn.commit()
 
-    # populate the rate matrix table
-    for a, (state_a, residue_a, codon_a) in enumerate(genetic_code):
-        for b, (state_b, residue_b, codon_b) in enumerate(genetic_code):
-            if a == b:
-                rate = 0
-            else:
-                rate = Q[a, b]
-            if rate > 0:
-                cursor.execute(
-                        'insert into rates values (?, ?, ?)',
-                        (state_a, state_b, rate),
-                        )
+    # populate the output rate matrix table
+    for a in dg:
+        for b in dg.successors(a):
+            rate = dg[a][b]['weight']
+            if rate:
+                s = 'insert into rates values (?, ?, ?)'
+                t = (a, b, rate)
+                cursor.execute(s, t)
     conn.commit()
 
     # populate the states table
-    for state, residue, codon in genetic_code:
-        cursor.execute('insert into states values (?, ?)', (state, codon))
+    for pair in state_name_pairs:
+        cursor.execute('insert into states values (?, ?)', pair)
     conn.commit()
 
     # populate the state distribution table
-    for prob, (state, residue, codon) in zip(distn, genetic_code):
-        cursor.execute('insert into distn values (?, ?)', (state, prob))
+    for item in distn.items():
+        cursor.execute('insert into distn values (?, ?)', item)
     conn.commit()
 
     # close the database connection
@@ -135,8 +154,14 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--rates', default='rate.matrix.db',
+            help=('input continuous-time Markov chain rate matrix '
+                'as an sqlite3 database file'))
+    parser.add_argument('--partition', default='partition.db',
+            help=('input partition of the primary states '
+                'as an sqlite3 database file'))
     parser.add_argument('--proportion-on', type=cmedbutil.nonneg_float,
-            help='partition part toleration probability')
+            help='part toleration probability')
     parser.add_argument('--syn-proportion-on', type=cmedbutil.nonneg_float,
             help='synonymous substitution toleration probability')
     parser.add_argument('--outfile', default='fast.blink.rate.matrix.db',

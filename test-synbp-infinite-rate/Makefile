@@ -2,7 +2,7 @@
 myscripts = ..
 nsamples = 10
 
-all: synbp.log.likelihoods.db limit.log.likelihoods.db
+all: synbp.log.likelihoods.db limit.log.likelihoods.db limit.txt synbp.txt
 
 codon.partition.db:
 	python $(myscripts)/bp-codon-state-partition.py \
@@ -44,31 +44,39 @@ limit.log.likelihoods.db: limit.rate.matrix.db histories.db codon.partition.db
 		--outfile=limit.log.likelihoods.db
 
 #
-# Construct a toy mg94 rate matrix from a toy genetic code.
+# Construct a toy mg-94-like rate matrix from a toy genetic code.
 #
 
-toy.partition.db:
+toy.rate.matrix.db:
 	python $(myscripts)/create-random-rate-matrix.py \
-		--outfile=codon.partition.db
+		--nstates=8 \
+		--outfile=toy.rate.matrix.db
 
-limit.rate.matrix.db:
-	python $(myscripts)/create-mg94.py \
-		--code=$(myscripts)/universal.code.db \
-		--omega=1.6 \
-		--expected-syn-rate=0.25 \
-		--outfile=limit.rate.matrix.db
+toy.partition.db: toy.rate.matrix.db
+	python $(myscripts)/bp-random-state-partition.py \
+		--nparts=4 \
+		--rates=toy.rate.matrix.db \
+		--outfile=toy.partition.db
 
-limit.txt: limit.rate.matrix.db
+toy.limit.rate.matrix.db: toy.rate.matrix.db toy.partition.db
+	python $(myscripts)/fast-bp-rate-matrix.py \
+		--proportion-on=0.4 \
+		--syn-proportion-on=0.25 \
+		--rates=toy.rate.matrix.db \
+		--partition=toy.partition.db \
+		--outfile=toy.limit.rate.matrix.db
+
+limit.txt: toy.limit.rate.matrix.db
 	python $(myscripts)/ctmc-endpoint-probability.py \
 		--initial=0 --final=1 --elapsed=5 \
-		--rates=limit.rate.matrix.db \
+		--rates=toy.limit.rate.matrix.db \
 		> limit.txt
 
-synbp.txt: plain.rate.matrix.db toy.partition.db
+synbp.txt: toy.rate.matrix.db toy.partition.db
 	python $(myscripts)/synbp-endpoint-probability.py \
 		--initial=0 --final=1 --elapsed=5 \
-		--rates=plain.rate.matrix.db \
-		--partition=partition.db \
+		--rates=toy.rate.matrix.db \
+		--partition=toy.partition.db \
 		--rate-on=20000 --rate-off=30000 \
 		--syn-rate-on=10000 --syn-rate-off=30000 \
 		> synbp.txt
