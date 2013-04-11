@@ -1,8 +1,17 @@
 cmedb
 =====
 
-vaporware computational molecular evolution command line suite
+~~vaporware~~ computational molecular evolution command line suite
 using small sqlite databases for input and output
+
+
+jargon used within the code and for script filenames
+----------------------------------------------------
+
+mclr : Monte Carlo likelihood ratio
+bp : 'blinking process'
+ec : endpoint-conditioned (or leaf-conditioned for trees)
+ctmc : continuous-time Markov chain (often required to be time-reversible)
 
 
 formats of various data types for computational molecular evolution

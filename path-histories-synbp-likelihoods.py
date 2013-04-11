@@ -121,12 +121,13 @@ def get_dynamic_syn_thread_log_likelihood(
     # These are the only points at which the
     # state of the hidden blinking thread that enables/disables
     # synonymous substitutions is known.
-    point_is_syn = [False]
+    point_is_syn = []
     for seg_info_a, seg_info_b in cmedbutil.pairwise(path_history):
         seg_a, pri_a, dur_a = seg_info_a
         seg_b, pri_b, dur_b = seg_info_b
         syn = (pri_a != pri_b and partition[pri_a] == partition[pri_b])
         point_is_syn.append(syn)
+    point_is_syn = [False] + point_is_syn + [False]
 
     # At each interesting point,
     # compute the likelihood of the remaining path for (conditional on)
