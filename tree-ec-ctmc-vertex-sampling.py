@@ -29,7 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--rates', default='rate.matrix.db',
             help=('continuous-time Markov substitution process '
                 'as an sqlite3 database file'))
-    parser.add_argument('--leaf-patterns', default='patterns.db',
+    parser.add_argument('--site', default='site.db',
             help='aligned states at the leaves of the tree')
     parser.add_argument('--outfile', default='augmented.alignment.db',
             help='augmented alignment at all nodes of the tree')
