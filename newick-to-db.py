@@ -1,23 +1,18 @@
 """
-This is a one-off script to create a tree database file.
+Use dendropy to convert a newick tree with branch lengths to a sqlite3 file.
 """
 
-from StringIO import StringIO
+import argparse
 import sqlite3
 
 import dendropy
 
 
-g_newick_string = (
-        '((((((Has,Ptr),Ppy),(((Mmu,Mfu),Mfa),Cae)),(Mim,Tgl)),'
-        '((((((Mum,Rno),Mun),(Cgr,Mau)),Sju),(Cpo,Mmo)),(Ocu,Opr))),'
-        '(Sar,((Fca,Cfa),((Bta,Oar),Dle))));')
-
-
-def main():
+def main(args):
 
     # use dendropy to read this newick file
-    t = dendropy.Tree(stream=StringIO(g_newick_string), schema='newick')
+    with open(args.newick) as fin:
+        t = dendropy.Tree(stream=fin, schema='newick')
     leaves = t.leaf_nodes()
     nodes = list(t.postorder_node_iter())
     non_leaves = [n for n in nodes if n not in leaves]
@@ -28,24 +23,30 @@ def main():
 
     # get edges
     edge_va_vb_list = []
+    edge_blen_list = []
     edges = list(t.postorder_edge_iter())
     for i, edge in enumerate(edges):
         if edge.head_node and edge.tail_node:
             va = node_id_to_index[id(edge.head_node)]
             vb = node_id_to_index[id(edge.tail_node)]
             edge_va_vb_list.append((i, va, vb))
+            edge_blen_list.append((i, edge.length))
 
     # get a list of (node, name) pairs for the table
     node_name_list = [(i, str(n.taxon)) for i, n in enumerate(leaves)]
 
     # open the database file
-    conn = sqlite3.connect('p53S.tree.db')
+    conn = sqlite3.connect(args.outfile)
     cursor = conn.cursor()
 
     # create the tables
     cursor.execute(
             'create table topo ('
             'edge integer, va integer, vb integer, '
+            'primary key (edge))')
+    cursor.execute(
+            'create table blen ('
+            'edge integer, blen real, '
             'primary key (edge))')
     cursor.execute(
             'create table taxa ('
@@ -63,10 +64,20 @@ def main():
         cursor.execute('insert into taxa values (?, ?)', node_name)
     conn.commit()
 
+    # populate the branch length table
+    for edge_blen in edge_blen_list:
+        cursor.execute('insert into blen values (?, ?)', edge_blen)
+    conn.commit()
+
     # close the database connection
     conn.close()
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--newick', default='tree.newick',
+            help='input tree as a newick file')
+    parser.add_argument('--outfile', default='tree.db',
+            help='output tree in sqlite3 format')
+    main(parser.parse_args())
 
