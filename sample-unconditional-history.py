@@ -1,19 +1,11 @@
 """
 Sample state histories along a tree.
 
-This is unfinished.
 The number of sampled histories is a command line option.
 The root (for the purposes of sampling) is also given on the command line.
 If the rate matrix is time-reversible then the choice of root does not matter.
 The tree topology and branch lengths are given by a database.
 The rates and initial state distribution are given by another database.
-history integer
-segment integer
-va integer
-vb integer
-blen real
-state integer
-primary key (history, segment)
 """
 
 import argparse
