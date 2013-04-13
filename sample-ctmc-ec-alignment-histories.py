@@ -111,7 +111,38 @@ def get_unrooted_tree(cursor):
     return G
 
 
-def sample_site_history(foo, bar):
+# XXX similar to code in felsenstein-likelihood.py
+def get_v_to_subtree_probs(nstates, G_dag, edge_to_P, leaf_to_state_index):
+    """
+    Get partial likelihoods on an arbitrarily rooted tree.
+    Use a Felsenstein-like algorithm
+    to compute subtree probs given a subtree root state.
+    This depends on the rooted tree structure, the edge_to_P map,
+    and the states of the alignment column at the leaves.
+    @param nstates: number of states
+    @param G_dag: arbitrarily rooted genetic history with branch lengths
+    @param edge_to_P: (a, b) to transition matrix
+    @param leaf_to_state_index: alignment column information
+    @return: map from a vertex to a vector of state-conditioned subtree probs
+    """
+    v_to_subtree_probs = {}
+    for a in reversed(nx.topological_sort(G_dag)):
+        subtree_probs = np.ones(nstates, dtype=float)
+        successors = G_dag.successors(a)
+        if successors:
+            for state_index in range(nstates):
+                for b in successors:
+                    P = edge_to_P[a, b]
+                    p = np.dot(P[state_index], v_to_subtree_probs[b])
+                    subtree_probs[state_index] *= p
+        else:
+            state_index = leaf_to_state_index[a]
+            subtree_probs[state_index] = 1
+        v_to_subtree_probs[a] = subtree_probs
+    return v_to_subtree_probs
+
+
+def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
     """
     Endpoint conditioned path history sampling at a site.
     All inputs and outputs of this function should
@@ -119,12 +150,65 @@ def sample_site_history(foo, bar):
     as opposed to the ascii name of the state
     or the numerical identifier used in the sqlite
     rate matrix and alignment files.
+    @param Q: rate matrix
+    @param distn: equilibrium distribution of the reversible process
+    @param G_dag: arbitrarily rooted genetic history with branch lengths
+    @param edge_to_P: (a, b) to transition matrix
+    @param leaf_to_state_index: alignment column information
+    @return: path history as a list of tuples
     """
-    # Use a Felsenstein-like algorithm
-    # to compute subtree probs given a subtree root state.
-    # This depends on the rooted tree structure, the edge_to_P map,
-    # and the states of the alignment column at the leaves.
-    v_to_subtree_probs = {}
+
+    # Define the leaf and non-leaf vertices.
+    # Pick an arbitrary non-leaf vertex to act as the root.
+    leaves = sorted(v for v in G if G.degree(v) == 1)
+    non_leaves = sorted(set(G) - set(leaves))
+    root = non_leaves[0]
+    
+    # Define more temporary info.
+    leaf_set = set(leaves)
+    nleaves = len(leaf_set)
+    nstates = Q.shape[0]
+
+    # Use some dynamic programming to get the
+    # the subtree probability for each internal node
+    # for each state index at that internal node.
+    v_to_subtree_probs = get_v_to_subtree_probs(
+            nstates, G_dag, edge_to_P, leaf_to_state_index)
+
+    # Sample the states at internal vertices,
+    # conditional on the values at the leaves
+    # and on the parent state.
+    v_to_state_index = {}
+    for v in nx.topological_sort(G_dag):
+        predecessors = G_dag.predecessors(v)
+        successors = G_dag.successors(v)
+        if successors:
+            if not predecessors:
+                prior_distn = distn
+            elif len(parents) == 1:
+                parent = parents[0]
+                parent_state_index = v_to_state_index[parent]
+                P = edge_to_P[parent, v]
+                prior_distn = P[parent_state_index]
+            else:
+                raise Exception('found a node with multiple predecessors')
+            weights = np.dot(prior_distn, v_to_subtree_probs[v])
+            category_distn = weights / np.sum(weights)
+            v_to_state_index[v] = cmedbutil.random_category(category_distn)
+        else:
+            v_to_state_index[v] = leaf_to_state_index[v]
+
+    # Get a decomposition of the rate matrix for path sampling on branches.
+    rates, P = cmedbutil.decompose_rates(Q)
+
+    # Endpoint conditioned path sampling along each branch.
+    'segment integer, '
+    'va integer, '
+    'vb integer, '
+    'blen real, '
+    'state integer, '
+
+    return site_history
 
 
 def main(args):
@@ -185,9 +269,6 @@ def main(args):
     for a, b in G_dag.edges():
         edge_to_P[a, b] = scipy.linalg.expm(Q * G_dag[a][b]['blen'])
 
-    # Get a decomposition of the rate matrix for path sampling on branches.
-    rates, P = cmedbutil.decompose_rates(Q)
-
     # open a database file for writing
     conn = sqlite3.connect(args.outfile)
     cursor = conn.cursor()
@@ -210,14 +291,17 @@ def main(args):
     # populate the database
     for history_index in range(args.nhistories):
         for offset in offsets:
-            for seg, va, vb, blen, state in sample_site_history(
-                    foo, bar):
+            leaf_to_state_index = {}
+            for leaf in leaves:
+                state = offset_to_leaf_map[offset][leaf]
+                leaf_to_state_index[leaf] = s_to_i[state]
+            for seg, va, vb, blen, state_index in sample_site_history(
+                    Q, distn, G_dag, edge_to_P, leaf_to_state_index):
+                state = states[state_index]
                 s = 'insert into histories values (?, ?, ?, ?, ?, ?, ?)'
                 t = (history_index, offset, seg, va, vb, blen, state)
                 cursor.execute(s, t)
                 conn.commit()
-
-
 
     # close the output database
     conn.close()
