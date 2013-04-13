@@ -20,6 +20,16 @@ For now, do not treat nhistories=1 as a special case.
 """
 
 
+import argparse
+import sqlite3
+from collections import defaultdict
+
+import numpy as np
+import scipy.linalg
+
+import cmedbutil
+
+
 #XXX copypasted
 def get_rate_matrix_info(cursor):
     """
@@ -101,6 +111,22 @@ def get_unrooted_tree(cursor):
     return G
 
 
+def sample_site_history(foo, bar):
+    """
+    Endpoint conditioned path history sampling at a site.
+    All inputs and outputs of this function should
+    represent genetic states using row indices into a matrix,
+    as opposed to the ascii name of the state
+    or the numerical identifier used in the sqlite
+    rate matrix and alignment files.
+    """
+    # Use a Felsenstein-like algorithm
+    # to compute subtree probs given a subtree root state.
+    # This depends on the rooted tree structure, the edge_to_P map,
+    # and the states of the alignment column at the leaves.
+    v_to_subtree_probs = {}
+
+
 def main(args):
 
     # define the number of histories to sample
@@ -112,16 +138,35 @@ def main(args):
     states, distn, Q = get_rate_matrix_info(cursor)
     conn.close()
 
-    # open the tree db file
+    # read the unrooted tree from the database
     conn = sqlite3.connect(args.tree)
     cursor = conn.cursor()
     G = get_unrooted_tree(cursor)
     conn.close()
 
-    #XXX read the alignment
+    # read the alignment from the database
+    conn = sqlite3.connect(args.alignment)
+    cursor = conn.cursor()
+    cursor.execute(
+            'select offset, taxon, state from alignment '
+            'order by offset, taxon')
+    offset_taxon_state = list(cursor)
+    cursor.execute('select offset from alignment')
+    offsets = set(t[0] for t in cursor)
+    conn.close()
 
-    # pick an arbitrary internal vertex to act as the root
-    non_leaves = [v for v in G if G.degree(v) > 1]
+    # define the map from state to rate matrix index
+    s_to_i = dict((s, i) for i, s in enumerate(states))
+
+    # for each offset get a map from leaf taxon to genetic state
+    offset_to_leaf_map = defaultdict(dict)
+    for offset, taxon, state in offset_taxon_state:
+        offset_to_leaf_map[offset][taxon] = state
+
+    # Define the leaf and non-leaf vertices.
+    # Pick an arbitrary non-leaf vertex to act as the root.
+    leaves = sorted(v for v in G if G.degree(v) == 1)
+    non_leaves = sorted(set(G) - set(leaves))
     root = non_leaves[0]
 
     # Build a directed breadth first tree starting at the distinguished vertex.
@@ -140,11 +185,12 @@ def main(args):
     for a, b in G_dag.edges():
         edge_to_P[a, b] = scipy.linalg.expm(Q * G_dag[a][b]['blen'])
 
-    # Use a Felsenstein-like algorithm
-    # to compute subtree probs given the current state.
-    # This depends on the rooted tree structure, the edge_to_P map,
-    # and the states of the alignment column at the leaves.
-    v_to_subtree_probs = {}
+    # Get a decomposition of the rate matrix for path sampling on branches.
+    rates, P = cmedbutil.decompose_rates(Q)
+
+    # open a database file for writing
+    conn = sqlite3.connect(args.outfile)
+    cursor = conn.cursor()
 
     # initialize the output table
     cursor = conn.cursor()
@@ -157,21 +203,23 @@ def main(args):
             'vb integer, '
             'blen real, '
             'state integer, '
-            'primary key (history, segment))'
+            'primary key (history, offset, segment))'
             ).format(table=table)
     cursor.execute(s)
-    conn.commit()
 
-    # XXX sample internal vertex states
+    # populate the database
+    for history_index in range(args.nhistories):
+        for offset in offsets:
+            for seg, va, vb, blen, state in sample_site_history(
+                    foo, bar):
+                s = 'insert into histories values (?, ?, ?, ?, ?, ?, ?)'
+                t = (history_index, offset, seg, va, vb, blen, state)
+                cursor.execute(s, t)
+                conn.commit()
 
-    # Get a decomposition of the rate matrix for path sampling on branches.
-    rates, P = cmedbutil.decompose_rates(Q)
 
-    # XXX sample endpoint conditioned path histories
 
-    # sample the unconditional history or histories
-    conn = sqlite3.connect(args.outfile)
-    #XXX populate the table
+    # close the output database
     conn.close()
 
 
