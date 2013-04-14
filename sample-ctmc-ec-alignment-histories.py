@@ -22,9 +22,12 @@ For now, do not treat nhistories=1 as a special case.
 
 import argparse
 import sqlite3
+import random
+import math
 from collections import defaultdict
 
 import numpy as np
+import networkx as nx
 import scipy.linalg
 
 import cmedbutil
@@ -142,6 +145,101 @@ def get_v_to_subtree_probs(nstates, G_dag, edge_to_P, leaf_to_state_index):
     return v_to_subtree_probs
 
 
+#XXX this is copypasted
+def gen_branch_history_sample(state_in, blen_in, rates, P, t0=0.0):
+    """
+    Forward path sampling along a branch with a known initial state.
+    Yield (transition time, new state) pairs.
+    The path sampling is conditional on the initial state
+    but it is not conditional on the final state.
+    So this is a 'forward' rather than a 'bridge' sampling.
+    It does not require any matrix exponential computation.
+    @param state_in: initial state
+    @param blen_in: time until end of branch
+    @param rates: the rate away from each state
+    @param P: transition matrix conditional on leaving a state
+    @param t0: initial time
+    """
+    t = t0
+    state = state_in
+    nstates = len(rates)
+    while True:
+        rate = rates[state]
+        scale = 1 / rate
+        delta_t = np.random.exponential(scale=scale)
+        t += delta_t
+        if t >= blen_in:
+            return
+        distn = P[state]
+        state = cmedbutil.random_category(distn)
+        yield t, state
+
+
+#XXX copypasted
+def gen_modified_branch_history_sample(
+        initial_state, final_state, blen_in, rates, P, t0=0.0):
+    """
+    This is a helper function for Nielsen modified rejection sampling.
+    Yield (transition time, new state) pairs.
+    The idea is to sample a path which may need to be rejected,
+    and it is slightly clever in the sense that the path does not
+    need to be rejected as often as do naive forward path samples.
+    In more detail, this path sampler will generate paths
+    conditional on at least one change occurring on the path,
+    when appropriate.
+    @param initial_state: initial state
+    @param final_state: initial state
+    @param blen_in: length of the branch
+    @param rates: the rate away from each state
+    @param P: transition matrix conditional on leaving a state
+    @param t0: initial time
+    """
+    t = t0
+    state = initial_state
+    if state != final_state:
+        rate = rates[initial_state]
+        u = random.random()
+        delta_t = -math.log1p(u*math.expm1(-blen_in*rate)) / rate
+        t += delta_t
+        if t >= blen_in:
+            return
+        distn = P[state]
+        state = cmedbutil.random_category(distn)
+        yield t, state
+    for t, state in gen_branch_history_sample(state, blen_in, rates, P, t0=t):
+        yield t, state
+
+#XXX copypasted
+def get_modified_rejection_sample(
+        total_length, initial_state, final_state, rates, P):
+    """
+    If applicable, condition on at least one change.
+    This modification often associated with Rasmus Nielsen (2002).
+    @param total_length: length of the path history in continuous time
+    @param initial_state: state index at one end of the history
+    @param final_state: state index at the other end of the history
+    @param rates: rates away from the states
+    @param P: substitution distributions conditional on instantaneous change
+    """
+    accepted_path = []
+    while not accepted_path:
+        t_state_pairs = list(gen_modified_branch_history_sample(
+            initial_state, final_state, total_length, rates, P))
+        if t_state_pairs:
+            obs_final_length, obs_final_state = t_state_pairs[-1]
+            if obs_final_state == final_state:
+                accum = 0
+                state = initial_state
+                for blen, next_state in t_state_pairs:
+                    accepted_path.append((state, blen-accum))
+                    state = next_state
+                    accum = blen
+                accepted_path.append((state, total_length-accum))
+        elif initial_state == final_state:
+            accepted_path.append((initial_state, total_length))
+    return accepted_path
+
+
 def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
     """
     Endpoint conditioned path history sampling at a site.
@@ -160,8 +258,8 @@ def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
 
     # Define the leaf and non-leaf vertices.
     # Pick an arbitrary non-leaf vertex to act as the root.
-    leaves = sorted(v for v in G if G.degree(v) == 1)
-    non_leaves = sorted(set(G) - set(leaves))
+    leaves = sorted(v for v in G_dag if G_dag.degree(v) == 1)
+    non_leaves = sorted(set(G_dag) - set(leaves))
     root = non_leaves[0]
     
     # Define more temporary info.
@@ -185,14 +283,14 @@ def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
         if successors:
             if not predecessors:
                 prior_distn = distn
-            elif len(parents) == 1:
-                parent = parents[0]
+            elif len(predecessors) == 1:
+                parent = predecessors[0]
                 parent_state_index = v_to_state_index[parent]
                 P = edge_to_P[parent, v]
                 prior_distn = P[parent_state_index]
             else:
                 raise Exception('found a node with multiple predecessors')
-            weights = np.dot(prior_distn, v_to_subtree_probs[v])
+            weights = prior_distn * v_to_subtree_probs[v]
             category_distn = weights / np.sum(weights)
             v_to_state_index[v] = cmedbutil.random_category(category_distn)
         else:
@@ -202,19 +300,33 @@ def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
     rates, P = cmedbutil.decompose_rates(Q)
 
     # Endpoint conditioned path sampling along each branch.
-    'segment integer, '
-    'va integer, '
-    'vb integer, '
-    'blen real, '
-    'state integer, '
+    # Create new vertices at substitution points along the paths.
+    # Each segment gets its own index.
+    site_history = []
+    next_vertex = max(G_dag) + 1
+    next_seg = 0
+    for a, b in G_dag.edges():
+        initial_si = v_to_state_index[a]
+        final_si = v_to_state_index[b]
+        total_length = G_dag[a][b]['blen']
+        si_blen_pairs = get_modified_rejection_sample(
+                total_length, initial_si, final_si, rates, P)
+        nsegs = len(state_blen_pairs)
+        for i in range(nsegs-1):
+            path_vertices.append(next_vertex)
+            next_vertex += 1
+        path_vertices == [a] + path_vertices + [b]
+        path_edges = list(cmedbutil.pairwise(path_vertices))
+        for (va, vb), (si, blen) in zip(path_edges, si_blen_pairs):
+            t = (next_seg, va, vb, blen, si)
+            site_history.append(t)
+            next_seg += 1
 
+    # return the sampled history
     return site_history
 
 
 def main(args):
-
-    # define the number of histories to sample
-    nsamples = args.nsamples
 
     # read and validate the rate matrix info from the sqlite3 database file
     conn = sqlite3.connect(args.rates)
@@ -284,8 +396,7 @@ def main(args):
             'vb integer, '
             'blen real, '
             'state integer, '
-            'primary key (history, offset, segment))'
-            ).format(table=table)
+            'primary key (history, offset, segment))')
     cursor.execute(s)
 
     # populate the database
