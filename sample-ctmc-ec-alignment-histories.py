@@ -402,6 +402,11 @@ def main(args):
     # populate the database
     for history_index in range(args.nhistories):
         for offset in offsets:
+            if args.verbose:
+                print 'sampling a new (history, offset)'
+                print 'history index:', history_index
+                print 'offset:', offset
+                print
             leaf_to_state_index = {}
             for leaf in leaves:
                 state = offset_to_leaf_map[offset][leaf]
@@ -421,6 +426,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('-v', '--verbose', action='store_true',
+            help='spam more text')
     parser.add_argument('--tree', default='brown.tree.db',
             help='unrooted tree as an sqlite3 database file')
     parser.add_argument('--rates', default='rate.matrix.db',
