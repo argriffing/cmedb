@@ -241,13 +241,18 @@ def get_primary_log_likelihood(distn, dg, G_dag):
     for v in G_dag:
         preds = G_dag.predecessors(v)
         succs = G_dag.successors(v)
-        if len(pred) == 1 and len(succ) == 1:
+        if len(preds) == 1 and len(succs) == 1:
             pred = preds[0]
             succ = succs[0]
             a = G_dag[pred][v]['state']
             b = G_dag[v][succ]['state']
-            rate = dg[a][b]['weight']
-            log_likelihood += math.log(rate)
+
+            # Note that the states can be the same
+            # if there was a degree two vertex in the original tree,
+            # for example if the original tree was rooted.
+            if a != b:
+                rate = dg[a][b]['weight']
+                log_likelihood += math.log(rate)
 
     # return the log likelihood
     return log_likelihood
@@ -327,23 +332,6 @@ def main(args):
 
     # close the input database of tree histories
     conn.close()
-
-    # compute the path history log likelihoods
-    history_ll_pairs = []
-    for history, path_history in history_to_path.items():
-
-        # init the log likelihood
-        # add primary state log likelihood contributions
-        # add log likelihood blink thread log likelihood contributions
-        log_likelihood = 0.0
-        log_likelihood += get_primary_log_likelihood(distn, dg, path_history)
-        for part in range(nparts):
-            log_likelihood += get_dynamic_blink_thread_log_likelihood(
-                    part, partition, distn, dg, path_history,
-                    args.rate_on, args.rate_off)
-
-        # add the (history, log_likelihood) to the list
-        history_ll_pairs.append((history, log_likelihood))
 
     # open the database file for the output log likelihoods
     conn = sqlite3.connect(args.outfile)
