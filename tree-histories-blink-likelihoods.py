@@ -213,29 +213,41 @@ def get_dynamic_blink_thread_log_likelihood(
     return math.log(path_likelihood)
 
 
-def get_primary_log_likelihood(distn, dg, path_history):
+def get_primary_log_likelihood(distn, dg, G_dag):
     """
     This includes the initial state and the transitions.
     It does not include the dwell times,
     because these contributions are added by the blinking threads.
     @param distn: map from primary state to equilibrium probability
     @param dg: sparse primary state rate matrix as weighted directed networkx
-    @param path_history: triples of (segment, state, blen)
+    @param G_dag: directed phylogenetic tree with blen and state edge values
     @return: log likelihood
     """
 
-    # initialize
+    # get the previously arbitrarily chosen phylogenetic root vertex
+    root = nx.topological_sort(G_dag)[0]
+
+    # initialize log likelihood
     log_likelihood = 0.0
-    seg_seq, state_seq, duration_seq = zip(*path_history)
+
+    # get the primary state at the root
+    root_successor = G_dag.successors(root)[0]
+    initial_primary_state = G_dag[root][root_successor]['state']
 
     # add the contribution of the equilibrium distribution
-    initial_primary_state = state_seq[0]
     log_likelihood += math.log(distn[initial_primary_state])
 
     # add the contribution of the primary state transitions
-    for a, b in cmedbutil.pairwise(state_seq):
-        rate = dg[a][b]['weight']
-        log_likelihood += math.log(rate)
+    for v in G_dag:
+        preds = G_dag.predecessors(v)
+        succs = G_dag.successors(v)
+        if len(pred) == 1 and len(succ) == 1:
+            pred = preds[0]
+            succ = succs[0]
+            a = G_dag[pred][v]['state']
+            b = G_dag[v][succ]['state']
+            rate = dg[a][b]['weight']
+            log_likelihood += math.log(rate)
 
     # return the log likelihood
     return log_likelihood
@@ -285,16 +297,36 @@ def main(args):
     first_element = cmedbutil.first_element
     second_element = functools.partial(cmedbutil.nth_element, 1)
     for history, history_group in groupby(cursor, first_element):
-        print 'new history:', history
+        log_likelihood = 0.0
         for offset, offset_group in groupby(history_group, second_element):
-            print 'new offset:', offset
+            # initialize the networkx undirected graph
+            G = nx.Graph()
             for history, offset, segment, va, vb, blen, state in offset_group:
-                print segment
+                # add an edge to the undirected graph
+                G.add_edge(va, vb, blen=blen, state=state)
+            # choose a high-degree internal vertex as the root
+            deg_v_pairs = [(v, G.degree(v)) for v in G]
+            root_degree, root = max(deg_v_pairs)
+            # construct a directed acyclic graph with the arbitrary root
+            G_dag = nx.bfs_tree(G, root)
+            for a, b in G_dag.edges():
+                G_dag[a][b]['blen'] = G[a][b]['blen']
+                G_dag[a][b]['state'] = G[a][b]['state']
+            # add the log likelihood contribution of the primary thread
+            log_likelihood += get_primary_log_likelihood(
+                    distn, dg, G_dag)
+            # add the log likelihood contribution of the blink threads
+            #XXX
+            """
+            for part in range(nparts):
+                log_likelihood += get_dynamic_blink_thread_log_likelihood(
+                        part, partition, distn, dg, G_dag,
+                        args.rate_on, args.rate_off)
+            """
+        history_ll_pairs.append((history, log_likelihood))
 
     # close the input database of tree histories
     conn.close()
-
-    return
 
     # compute the path history log likelihoods
     history_ll_pairs = []
