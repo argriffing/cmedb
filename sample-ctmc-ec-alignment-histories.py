@@ -130,9 +130,9 @@ def get_v_to_subtree_probs(nstates, G_dag, edge_to_P, leaf_to_state_index):
     """
     v_to_subtree_probs = {}
     for a in reversed(nx.topological_sort(G_dag)):
-        subtree_probs = np.ones(nstates, dtype=float)
         successors = G_dag.successors(a)
         if successors:
+            subtree_probs = np.ones(nstates, dtype=float)
             for state_index in range(nstates):
                 for b in successors:
                     P = edge_to_P[a, b]
@@ -140,6 +140,7 @@ def get_v_to_subtree_probs(nstates, G_dag, edge_to_P, leaf_to_state_index):
                     subtree_probs[state_index] *= p
         else:
             state_index = leaf_to_state_index[a]
+            subtree_probs = np.zeros(nstates, dtype=float)
             subtree_probs[state_index] = 1
         v_to_subtree_probs[a] = subtree_probs
     return v_to_subtree_probs
@@ -296,6 +297,8 @@ def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
         else:
             v_to_state_index[v] = leaf_to_state_index[v]
 
+    #print v_to_state_index
+
     # Get a decomposition of the rate matrix for path sampling on branches.
     rates, P = cmedbutil.decompose_rates(Q)
 
@@ -309,13 +312,15 @@ def sample_site_history(Q, distn, G_dag, edge_to_P, leaf_to_state_index):
         initial_si = v_to_state_index[a]
         final_si = v_to_state_index[b]
         total_length = G_dag[a][b]['blen']
+        #print a, b, initial_si, final_si, total_length
         si_blen_pairs = get_modified_rejection_sample(
                 total_length, initial_si, final_si, rates, P)
-        nsegs = len(state_blen_pairs)
+        nsegs = len(si_blen_pairs)
+        path_vertices = [a]
         for i in range(nsegs-1):
             path_vertices.append(next_vertex)
             next_vertex += 1
-        path_vertices == [a] + path_vertices + [b]
+        path_vertices.append(b)
         path_edges = list(cmedbutil.pairwise(path_vertices))
         for (va, vb), (si, blen) in zip(path_edges, si_blen_pairs):
             t = (next_seg, va, vb, blen, si)
