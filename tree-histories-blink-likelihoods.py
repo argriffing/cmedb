@@ -1,15 +1,35 @@
 """
-Compute blink process likelihoods for multiple sampled path histories.
+Use dynamic programming to compute a complicated likelihood.
 
-This is like the analogous non-blink script,
-except that this script attempts to integrate over
-an unobserved blinking process.
-This requires some extra info,
-including a blink-on rate, a blink-off rate, and a partition of primary states.
-Whereas the single-history analog of this script allows
-both the slow 'brute' and the fast 'dynamic' implementations,
-this script allows only the fast implementation;
-the slower implementation is only useful for debugging.
+The likelihood is over a sampled state history on a tree.
+Not only are the states at the leaves assumed to be known,
+but so are the states at the internal vertices
+and also at all points along the branches.
+But there is also an unobserved continuous process
+consisting of the tolerated/untolerated status of each amino acid.
+Because there are 20 amino acids,
+the size of the state space of this unobserved process is n = 2^20
+(at any time, each tolerance can be on or off),
+which is too large for operations that cost n^3 such as matrix exponential.
+But because of the structure of the unobserved process,
+it is possible to break the likelihood integration over
+the unobserved observed amino acid tolerance states
+into 20 separate dynamic programming calculations over the tree.
+.
+A more advanced likelihood implementation will allow
+more data than just a sampled history on the tree.
+It would also allow some of the amino tolerances at the leaves
+of the tree to be observed.
+But this is not yet implemented.
+.
+Other unimplemented extensions to this blinking process model
+include an unobserved synonymous substitution tolerance state,
+and also amino acid dependent rates of blinking on and off.
+.
+The implementation could possibly be sped up by
+using an explicit solution of the expm of the micro rate matrix,
+possibly implemented in cython.
+Or alternatively this whole script could be rewritten in C.
 """
 
 import argparse
@@ -17,13 +37,19 @@ import sqlite3
 import math
 from itertools import permutations
 from itertools import product
+from itertools import groupby
 from collections import defaultdict
+import functools
 
 import numpy as np
 import networkx as nx
 import scipy.linalg
 
 import cmedbutil
+
+
+# XXX most of this script is copypasted;
+# the reusable functions should be moved into a separate module.
 
 
 #XXX copypasted
@@ -243,21 +269,32 @@ def main(args):
     parts = set(partition.values())
     nparts = len(parts)
 
-    # read the primary state path history from the sqlite3 database file
+    # Open the primary state tree history from the sqlite3 database file.
     conn = sqlite3.connect(args.histories)
     cursor = conn.cursor()
+
+    # Read rows of sampled tree history from the database,
+    # being careful to not read too much into RAM at once.
+    # Build the list of log likelihoods.
+    # There should be one log likelihood for each history.
     cursor.execute(
-            'select history, segment, state, blen '
+            'select history, offset, segment, va, vb, blen, state '
             'from histories '
-            'order by history, segment')
-    data = list(cursor)
+            'order by history, offset')
+    history_ll_pairs = []
+    first_element = cmedbutil.first_element
+    second_element = functools.partial(cmedbutil.nth_element, 1)
+    for history, history_group in groupby(cursor, first_element):
+        print 'new history:', history
+        for offset, offset_group in groupby(history_group, second_element):
+            print 'new offset:', offset
+            for history, offset, segment, va, vb, blen, state in offset_group:
+                print segment
+
+    # close the input database of tree histories
     conn.close()
 
-    # put the paths into a dictionary
-    history_to_path = defaultdict(list)
-    for history, segment, state, blen in data:
-        path_history = (segment, state, blen)
-        history_to_path[history].append(path_history)
+    return
 
     # compute the path history log likelihoods
     history_ll_pairs = []
@@ -305,8 +342,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rates', default='rate.matrix.db',
             help='time-reversible rate matrix as an sqlite3 database file')
-    parser.add_argument('--histories', default='path.histories.db',
-            help='input path histories as an sqlite3 database file')
+    parser.add_argument('--histories', default='tree.histories.db',
+            help='input tree histories as an sqlite3 database file')
     parser.add_argument('--outfile', default='log.likelihoods.db',
             help='output log likelihoods in sqlite3 format')
 

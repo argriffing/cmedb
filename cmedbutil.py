@@ -23,6 +23,18 @@ def pairwise(iterable):
 
 
 ###############################################################################
+# Not itertools recipes.
+
+
+def first_element(it):
+    for x in it:
+        return x
+
+def nth_element(n, seq):
+    return seq[n]
+
+
+###############################################################################
 # Extra types for argparse.
 
 def nonneg_int(x):

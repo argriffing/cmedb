@@ -14,7 +14,7 @@ G_mle = 0.25952
 
 #TODO under construction
 
-all: likelihood.txt
+all: likelihood.txt codon.partition.db
 
 tree.db:
 	python $(myscripts)/newick-to-db.py \
