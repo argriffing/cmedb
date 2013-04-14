@@ -422,7 +422,7 @@ def main(args):
                 s = 'insert into histories values (?, ?, ?, ?, ?, ?, ?)'
                 t = (history_index, offset, seg, va, vb, blen, state)
                 cursor.execute(s, t)
-                conn.commit()
+        conn.commit()
 
     # close the output database
     conn.close()
