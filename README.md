@@ -41,7 +41,7 @@ rate matrix:
     CREATE TABLE states (state integer, name text, primary key (state));
     sqlite> 
 
-single sampled substitution history on a tree, not endpoint-conditioned:
+single sampled substitution history on a tree
 
     $ sqlite3 history.db
     SQLite version 3.7.13 2012-06-11 02:05:22
@@ -51,7 +51,7 @@ single sampled substitution history on a tree, not endpoint-conditioned:
     CREATE TABLE history (segment integer, va integer, vb integer, blen real, state integer, primary key (segment));
     sqlite> 
 
-multiple sampled substitution histories on a tree, not endpoint-conditioned:
+multiple sampled substitution histories on a tree
 
     $ sqlite3 histories.db 
     SQLite version 3.7.13 2012-06-11 02:05:22
@@ -60,6 +60,11 @@ multiple sampled substitution histories on a tree, not endpoint-conditioned:
     sqlite> .schema
     CREATE TABLE histories (history integer, segment integer, va integer, vb integer, blen real, state integer, primary key (history, segment));
     sqlite> 
+
+multiple sampled substitution histories on a tree, per alignment column
+
+    $ echo ".schema" | sqlite3 test.samples.db
+    CREATE TABLE histories (history integer, offset integer, segment integer, va integer, vb integer, blen real, state integer, primary key (history, offset, segment));
 
 2d vertex layout:
 
