@@ -1,7 +1,7 @@
 """
 Use dynamic programming to compute a complicated likelihood.
 
-The likelihood is over a sampled state history on a tree.
+The likelihood is over a sampled state history on an alignment of leaf states.
 Not only are the states at the leaves assumed to be known,
 but so are the states at the internal vertices
 and also at all points along the branches.
@@ -46,10 +46,7 @@ import networkx as nx
 import scipy.linalg
 
 import cmedbutil
-
-
-# XXX most of this script is copypasted;
-# the reusable functions should be moved into a separate module.
+import mmpp
 
 
 #XXX copypasted
@@ -128,7 +125,7 @@ def get_sparse_rate_matrix_info(cursor):
 
 
 def get_dynamic_blink_thread_log_likelihood(
-        part, partition, distn, dg, path_history,
+        part, partition, distn, dg, G_dag,
         rate_on, rate_off):
     """
     This uses more-clever-than-brute force likelihood calculation.
@@ -137,66 +134,102 @@ def get_dynamic_blink_thread_log_likelihood(
     @param partition: a map from primary state to part
     @param distn: map from primary state to equilibrium probability
     @param dg: sparse primary state rate matrix as weighted directed networkx
-    @param path_history: triples of (segment, state, blen)
+    @param G_dag: directed phylogenetic tree with blen and state edge values
     @param rate_on: a blink rate
     @param rate_off: a blink rate
     @return: log likelihood
     """
 
-    # count the number of segments and the number of segment endpoints
-    nsegments = len(path_history)
-    npoints = nsegments + 1
+    # Beginning at the leaves and working toward the root,
+    # compute subtree likelihoods conditional on each blink state.
+    v_to_b_to_lk = defaultdict(dict)
 
-    # initialize the likelihood
-    log_likelihoods = []
+    # Initialize the likelihood map of each leaf vertex.
+    leaf_set = set(v for v in G_dag if G_dag.degree(v) == 1)
+    for leaf in leaf_set:
 
-    # At each interesting point,
-    # compute the likelihood of the remaining path for (conditional on)
-    # each of the two possible current blink states.
-    lk_table = np.zeros((npoints, 2), dtype=float)
-    lk_table[-1] = 1
-    for segment_index in reversed(range(nsegments)):
-        segment, primary_state, duration = path_history[segment_index]
+        # These likelihoods are allowed to be 1 even when
+        # the leaf blink state conflicts with the primary state at the leaf,
+        # because the conflicts will be handled at the edge level
+        # rather than at the vertex level.
+        v_to_b_to_lk[leaf][0] = 1.0
+        v_to_b_to_lk[leaf][1] = 1.0
 
-        # Get the conditional rate of turning off the blinking.
-        # This is zero if the primary state corresponds to the
-        # blink thread state, and otherwise it is rate_off.
-        if partition[primary_state] == part:
-            conditional_rate_off = 0.0
-        else:
-            conditional_rate_off = rate_off
+    # Work towards the root.
+    for v in reversed(nx.topological_sort(G_dag)):
+        if v in leaf_set:
+            continue
 
-        # Get the conditional rate of turning on the blinking.
-        # This is always rate_on.
-        conditional_rate_on = rate_on
+        # prepare to multiply by likelihoods for each successor branch
+        v_to_b_to_lk[v][0] = 1.0
+        v_to_b_to_lk[v][1] = 1.0
+        for succ in G_dag.successors(v):
 
-        # Get the absorption rate.
-        # This is the sum of primary transition rates
-        # into the part that corresponds to the current blink thread state.
-        rate_absorb = 0.0
-        for sink in dg.successors(primary_state):
-            rate = dg[primary_state][sink]['weight']
-            if partition[sink] == part:
-                rate_absorb += rate
+            # Get the primary state of this segment,
+            # and get its corresponding partition part.
+            pri_state = G_dag[v][succ]['state']
+            blen = G_dag[v][succ]['blen']
+            pri_part = partition[part]
 
-        # Construct the micro rate matrix and transition matrix.
-        Q_micro = get_micro_rate_matrix(
-                conditional_rate_off, conditional_rate_on, rate_absorb)
-        P_micro = scipy.linalg.expm(Q_micro * duration)
+            # Get the conditional rate of turning off the blinking.
+            # This is zero if the primary state corresponds to the
+            # blink thread state, and otherwise it is rate_off.
+            if partition[pri_state] == part:
+                conditional_rate_off = 0.0
+            else:
+                conditional_rate_off = rate_off
 
-        # Get the likelihood using the table.
-        for ba, bb in product((0, 1), repeat=2):
-            lk_transition = 1.0
-            if partition[primary_state] == part:
-                if not (ba and bb):
-                    lk_transition *= 0.0
-            lk_transition *= P_micro[ba, bb]
-            lk_rest = lk_table[segment_index+1, bb]
-            lk_table[segment_index, ba] += lk_transition * lk_rest
+            # Get the conditional rate of turning on the blinking.
+            # This is always rate_on.
+            conditional_rate_on = rate_on
 
-    # slowly and inefficiently get the first primary state
-    seg_seq, primary_state_seq, duration_seq = zip(*path_history)
-    initial_primary_state = primary_state_seq[0]
+            # Get the absorption rate.
+            # This is the sum of primary transition rates
+            # into the part that corresponds to the current blink thread state.
+            rate_absorb = 0.0
+            for sink in dg.successors(pri_state):
+                rate = dg[pri_state][sink]['weight']
+                if partition[sink] == part:
+                    rate_absorb += rate
+
+            # Construct the micro rate matrix and transition matrix.
+            P_micro = mmpp.get_mmpp_block(
+                    conditional_rate_on,
+                    conditional_rate_off,
+                    rate_absorb,
+                    blen,
+                    )
+            """
+            Q_micro_slow = get_micro_rate_matrix(
+                    conditional_rate_off, conditional_rate_on, rate_absorb)
+            P_micro_slow = scipy.linalg.expm(Q_micro_slow * blen)[:2, :2]
+            if not np.allclose(P_micro, P_micro_slow):
+                raise Exception((P_micro, P_micro_slow))
+            """
+
+            # Get the likelihood using the v_to_b_to_lk map.
+            lk_branch = {}
+            lk_branch[0] = 0.0
+            lk_branch[1] = 0.0
+            for ba, bb in product((0, 1), repeat=2):
+                lk_transition = 1.0
+                if partition[pri_state] == part:
+                    if not (ba and bb):
+                        lk_transition *= 0.0
+                lk_transition *= P_micro[ba, bb]
+                lk_rest = v_to_b_to_lk[succ][bb]
+                lk_branch[ba] += lk_transition * lk_rest
+
+            # Multiply by the likelihood associated with this branch.
+            v_to_b_to_lk[v][0] *= lk_branch[0]
+            v_to_b_to_lk[v][1] *= lk_branch[1]
+
+    # get the previously arbitrarily chosen phylogenetic root vertex
+    root = nx.topological_sort(G_dag)[0]
+
+    # get the primary state at the root
+    root_successor = G_dag.successors(root)[0]
+    initial_primary_state = G_dag[root][root_successor]['state']
 
     # The initial distribution contributes to the likelihood.
     if partition[initial_primary_state] == part:
@@ -206,8 +239,8 @@ def get_dynamic_blink_thread_log_likelihood(
         initial_proportion_off = rate_off / float(rate_on + rate_off)
         initial_proportion_on = rate_on / float(rate_on + rate_off)
     path_likelihood = 0.0
-    path_likelihood += initial_proportion_off * lk_table[0, 0]
-    path_likelihood += initial_proportion_on * lk_table[0, 1]
+    path_likelihood += initial_proportion_off * v_to_b_to_lk[root][0]
+    path_likelihood += initial_proportion_on * v_to_b_to_lk[root][1]
 
     # Report the log likelihood.
     return math.log(path_likelihood)
@@ -258,6 +291,26 @@ def get_primary_log_likelihood(distn, dg, G_dag):
     return log_likelihood
 
 
+def pick_arbitrary_root(G):
+    """
+    The vertex to be picked as the root should meet some criteria.
+    The first criterion is that its degree is at least 2.
+    The second criterion is that all edges adjacent to the root
+    vertex should share the same primary process state.
+    @param G: undirected networkx graph with state annotation of edges
+    @return: an arbitrary vertex qualified to act as the root
+    """
+    for v in G:
+        neighbors = G.neighbors(v)
+        if len(neighbors) > 1:
+            neighbor_edge_states = [G[v][n]['state'] for n in neighbors]
+            if len(set(neighbor_edge_states)) == 1:
+                return v
+    raise Exception(
+            'failed to find any vertex '
+            'qualified to act as the root')
+
+
 #XXX massive copypasting from a similarly named script
 def main(args):
 
@@ -304,31 +357,38 @@ def main(args):
     for history, history_group in groupby(cursor, first_element):
         log_likelihood = 0.0
         for offset, offset_group in groupby(history_group, second_element):
+            if args.verbose:
+                print history, offset
             # initialize the networkx undirected graph
             G = nx.Graph()
             for history, offset, segment, va, vb, blen, state in offset_group:
                 # add an edge to the undirected graph
                 G.add_edge(va, vb, blen=blen, state=state)
-            # choose a high-degree internal vertex as the root
-            deg_v_pairs = [(v, G.degree(v)) for v in G]
-            root_degree, root = max(deg_v_pairs)
             # construct a directed acyclic graph with the arbitrary root
-            G_dag = nx.bfs_tree(G, root)
+            G_dag = nx.bfs_tree(G, pick_arbitrary_root(G))
             for a, b in G_dag.edges():
                 G_dag[a][b]['blen'] = G[a][b]['blen']
                 G_dag[a][b]['state'] = G[a][b]['state']
             # add the log likelihood contribution of the primary thread
-            log_likelihood += get_primary_log_likelihood(
-                    distn, dg, G_dag)
+            ll = get_primary_log_likelihood(distn, dg, G_dag)
+            log_likelihood += ll
+            if args.verbose:
+                print 'll contribution of primary process:', ll
             # add the log likelihood contribution of the blink threads
-            #XXX
-            """
+            ll = 0.0
             for part in range(nparts):
-                log_likelihood += get_dynamic_blink_thread_log_likelihood(
+                ll += get_dynamic_blink_thread_log_likelihood(
                         part, partition, distn, dg, G_dag,
                         args.rate_on, args.rate_off)
-            """
-        history_ll_pairs.append((history, log_likelihood))
+            if args.verbose:
+                print 'll contribution of blink process:', ll
+                print
+            log_likelihood += ll
+        history_ll_pair = (history, log_likelihood)
+        if args.verbose:
+            print history_ll_pair
+            print
+        history_ll_pairs.append(history_ll_pair)
 
     # close the input database of tree histories
     conn.close()
@@ -360,6 +420,8 @@ if __name__ == '__main__':
 
     # begin to define the command line arguments
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('-v', '--verbose', action='store_true',
+            help='spam more text')
     parser.add_argument('--rates', default='rate.matrix.db',
             help='time-reversible rate matrix as an sqlite3 database file')
     parser.add_argument('--histories', default='tree.histories.db',
