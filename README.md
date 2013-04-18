@@ -12,6 +12,7 @@ jargon used within the code and for script filenames
 * bp : 'blinking process'
 * ec : endpoint-conditioned (or leaf-conditioned for trees)
 * ctmc : continuous-time Markov chain (often required to be time-reversible)
+* mmpp : Markov modulated Poisson process
 
 
 formats of various data types for computational molecular evolution
