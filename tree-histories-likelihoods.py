@@ -1,35 +1,12 @@
 """
-Use dynamic programming to compute a complicated likelihood.
+Compute a continuous time Markov chain likelihood for histories on trees.
 
-The likelihood is over a sampled state history on an alignment of leaf states.
-Not only are the states at the leaves assumed to be known,
-but so are the states at the internal vertices
-and also at all points along the branches.
-But there is also an unobserved continuous process
-consisting of the tolerated/untolerated status of each amino acid.
-Because there are 20 amino acids,
-the size of the state space of this unobserved process is n = 2^20
-(at any time, each tolerance can be on or off),
-which is too large for operations that cost n^3 such as matrix exponential.
-But because of the structure of the unobserved process,
-it is possible to break the likelihood integration over
-the unobserved observed amino acid tolerance states
-into 20 separate dynamic programming calculations over the tree.
-.
-A more advanced likelihood implementation will allow
-more data than just a sampled history on the tree.
-It would also allow some of the amino tolerances at the leaves
-of the tree to be observed.
-But this is not yet implemented.
-.
-Other unimplemented extensions to this blinking process model
-include an unobserved synonymous substitution tolerance state,
-and also amino acid dependent rates of blinking on and off.
-.
-The implementation could possibly be sped up by
-using an explicit solution of the expm of the micro rate matrix,
-possibly implemented in cython.
-Or alternatively this whole script could be rewritten in C.
+Strangely this script is being written after the more complicated
+blinking process likelihood script.
+This script does not require dynamic programming;
+it just requires counting things and computing scalar exponentials.
+It does not require matrix exponentials.
+However it does require the rate matrix to be time-reversible.
 """
 
 import argparse
@@ -43,25 +20,9 @@ import functools
 
 import numpy as np
 import networkx as nx
-import scipy.linalg
 
 import cmedbutil
-import mmpp
 
-
-#XXX copypasted
-def get_micro_rate_matrix(rate_off, rate_on, rate_absorb):
-    """
-    The micro state order is ('off', 'on', 'absorbed').
-    @param rate_off: rate from the 'on' state to the 'off' state
-    @param rate_on: rate from the 'off' state to the 'on' state
-    @param rate_absorb: rate from the 'on' state to the 'absorbing' state
-    @return: a continuous time rate matrix
-    """
-    return np.array([
-        [-rate_on, rate_on, 0],
-        [rate_off, -(rate_off + rate_absorb), rate_absorb],
-        [0, 0, 0]], dtype=float)
 
 #XXX copypasted
 def get_sparse_rate_matrix_info(cursor):
@@ -124,128 +85,6 @@ def get_sparse_rate_matrix_info(cursor):
     return distn, dg
 
 
-def get_dynamic_blink_thread_log_likelihood(
-        part, partition, distn, dg, G_dag,
-        rate_on, rate_off):
-    """
-    This uses more-clever-than-brute force likelihood calculation.
-    In particular it uses dynamic programming or memoization or whatever.
-    @param part: the part of the partition defining the current blink thred
-    @param partition: a map from primary state to part
-    @param distn: map from primary state to equilibrium probability
-    @param dg: sparse primary state rate matrix as weighted directed networkx
-    @param G_dag: directed phylogenetic tree with blen and state edge values
-    @param rate_on: a blink rate
-    @param rate_off: a blink rate
-    @return: log likelihood
-    """
-
-    # Beginning at the leaves and working toward the root,
-    # compute subtree likelihoods conditional on each blink state.
-    v_to_b_to_lk = defaultdict(dict)
-
-    # Initialize the likelihood map of each leaf vertex.
-    leaf_set = set(v for v in G_dag if G_dag.degree(v) == 1)
-    for leaf in leaf_set:
-
-        # These likelihoods are allowed to be 1 even when
-        # the leaf blink state conflicts with the primary state at the leaf,
-        # because the conflicts will be handled at the edge level
-        # rather than at the vertex level.
-        v_to_b_to_lk[leaf][0] = 1.0
-        v_to_b_to_lk[leaf][1] = 1.0
-
-    # Work towards the root.
-    for v in reversed(nx.topological_sort(G_dag)):
-        if v in leaf_set:
-            continue
-
-        # prepare to multiply by likelihoods for each successor branch
-        v_to_b_to_lk[v][0] = 1.0
-        v_to_b_to_lk[v][1] = 1.0
-        for succ in G_dag.successors(v):
-
-            # Get the primary state of this segment,
-            # and get its corresponding partition part.
-            pri_state = G_dag[v][succ]['state']
-            blen = G_dag[v][succ]['blen']
-            pri_part = partition[part]
-
-            # Get the conditional rate of turning off the blinking.
-            # This is zero if the primary state corresponds to the
-            # blink thread state, and otherwise it is rate_off.
-            if partition[pri_state] == part:
-                conditional_rate_off = 0.0
-            else:
-                conditional_rate_off = rate_off
-
-            # Get the conditional rate of turning on the blinking.
-            # This is always rate_on.
-            conditional_rate_on = rate_on
-
-            # Get the absorption rate.
-            # This is the sum of primary transition rates
-            # into the part that corresponds to the current blink thread state.
-            rate_absorb = 0.0
-            for sink in dg.successors(pri_state):
-                rate = dg[pri_state][sink]['weight']
-                if partition[sink] == part:
-                    rate_absorb += rate
-
-            # Construct the micro rate matrix and transition matrix.
-            P_micro = mmpp.get_mmpp_block(
-                    conditional_rate_on,
-                    conditional_rate_off,
-                    rate_absorb,
-                    blen,
-                    )
-            """
-            Q_micro_slow = get_micro_rate_matrix(
-                    conditional_rate_off, conditional_rate_on, rate_absorb)
-            P_micro_slow = scipy.linalg.expm(Q_micro_slow * blen)[:2, :2]
-            if not np.allclose(P_micro, P_micro_slow):
-                raise Exception((P_micro, P_micro_slow))
-            """
-
-            # Get the likelihood using the v_to_b_to_lk map.
-            lk_branch = {}
-            lk_branch[0] = 0.0
-            lk_branch[1] = 0.0
-            for ba, bb in product((0, 1), repeat=2):
-                lk_transition = 1.0
-                if partition[pri_state] == part:
-                    if not (ba and bb):
-                        lk_transition *= 0.0
-                lk_transition *= P_micro[ba, bb]
-                lk_rest = v_to_b_to_lk[succ][bb]
-                lk_branch[ba] += lk_transition * lk_rest
-
-            # Multiply by the likelihood associated with this branch.
-            v_to_b_to_lk[v][0] *= lk_branch[0]
-            v_to_b_to_lk[v][1] *= lk_branch[1]
-
-    # get the previously arbitrarily chosen phylogenetic root vertex
-    root = nx.topological_sort(G_dag)[0]
-
-    # get the primary state at the root
-    root_successor = G_dag.successors(root)[0]
-    initial_primary_state = G_dag[root][root_successor]['state']
-
-    # The initial distribution contributes to the likelihood.
-    if partition[initial_primary_state] == part:
-        initial_proportion_off = 0.0
-        initial_proportion_on = 1.0
-    else:
-        initial_proportion_off = rate_off / float(rate_on + rate_off)
-        initial_proportion_on = rate_on / float(rate_on + rate_off)
-    path_likelihood = 0.0
-    path_likelihood += initial_proportion_off * v_to_b_to_lk[root][0]
-    path_likelihood += initial_proportion_on * v_to_b_to_lk[root][1]
-
-    # Report the log likelihood.
-    return math.log(path_likelihood)
-
-
 def get_primary_log_likelihood(distn, dg, G_dag):
     """
     This includes the initial state and the transitions.
@@ -291,6 +130,7 @@ def get_primary_log_likelihood(distn, dg, G_dag):
     return log_likelihood
 
 
+# XXX directly copypasted
 def pick_arbitrary_root(G):
     """
     The vertex to be picked as the root should meet some criteria.
@@ -314,30 +154,11 @@ def pick_arbitrary_root(G):
 #XXX massive copypasting from a similarly named script
 def main(args):
 
-    # check blink rates
-    if (args.rate_on + args.rate_off) in (0, float('Inf')):
-        raise NotImplementedError(
-                'for extreme limits of blinking rates, '
-                'use a different script to compute the likelihood')
-
     # read the sparse rate matrix from a database file
     conn = sqlite3.connect(args.rates)
     cursor = conn.cursor()
     distn, dg = get_sparse_rate_matrix_info(cursor)
     conn.close()
-
-    # Read the partition from a database file.
-    # The hidden blinking process controls the state transition
-    # of the primary process according to this partition
-    # of primary process states.
-    conn = sqlite3.connect(args.partition)
-    cursor = conn.cursor()
-    partition = dict(cursor.execute('select state, part from partition'))
-    conn.close()
-
-    # get the set of indices of parts
-    parts = set(partition.values())
-    nparts = len(parts)
 
     # Open the primary state tree history from the sqlite3 database file.
     conn = sqlite3.connect(args.histories)
@@ -417,8 +238,6 @@ def main(args):
 
 
 if __name__ == '__main__':
-
-    # begin to define the command line arguments
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('-v', '--verbose', action='store_true',
             help='spam more text')
@@ -428,18 +247,5 @@ if __name__ == '__main__':
             help='input tree histories as an sqlite3 database file')
     parser.add_argument('--outfile', default='log.likelihoods.db',
             help='output log likelihoods in sqlite3 format')
-
-    # these args are specific to the blinking process
-    parser.add_argument('--rate-on',
-            type=cmedbutil.nonneg_float,
-            help='rate at which blink states change from off to on')
-    parser.add_argument('--rate-off',
-            type=cmedbutil.nonneg_float,
-            help='rate at which blink states change from on to off')
-    parser.add_argument('--partition', default='partition.db',
-            help=('a partition of the primary states '
-                'as an sqlite3 database file'))
-
-    # call the main function
     main(parser.parse_args())
 
