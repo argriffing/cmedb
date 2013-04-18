@@ -88,8 +88,6 @@ def get_sparse_rate_matrix_info(cursor):
 def get_primary_log_likelihood(distn, dg, G_dag):
     """
     This includes the initial state and the transitions.
-    It does not include the dwell times,
-    because these contributions are added by the blinking threads.
     @param distn: map from primary state to equilibrium probability
     @param dg: sparse primary state rate matrix as weighted directed networkx
     @param G_dag: directed phylogenetic tree with blen and state edge values
@@ -125,6 +123,14 @@ def get_primary_log_likelihood(distn, dg, G_dag):
             if a != b:
                 rate = dg[a][b]['weight']
                 log_likelihood += math.log(rate)
+
+    # add the log likelihood contributions of the dwell times
+    for va, vb in G_dag.edges():
+        blen = G_dag[va][vb]['blen']
+        source = G_dag[va][vb]['state']
+        sinks = dg.successors(source)
+        rate = sum(dg[source][sink]['weight'] for sink in sinks)
+        log_likelihood -= rate * blen
 
     # return the log likelihood
     return log_likelihood
@@ -195,16 +201,6 @@ def main(args):
             log_likelihood += ll
             if args.verbose:
                 print 'll contribution of primary process:', ll
-            # add the log likelihood contribution of the blink threads
-            ll = 0.0
-            for part in range(nparts):
-                ll += get_dynamic_blink_thread_log_likelihood(
-                        part, partition, distn, dg, G_dag,
-                        args.rate_on, args.rate_off)
-            if args.verbose:
-                print 'll contribution of blink process:', ll
-                print
-            log_likelihood += ll
         history_ll_pair = (history, log_likelihood)
         if args.verbose:
             print history_ll_pair

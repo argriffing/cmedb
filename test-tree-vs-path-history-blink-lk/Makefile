@@ -4,6 +4,8 @@ myscripts = ..
 nstates = 8
 nparts = 4
 nsegments = 6
+rate_on = 1
+rate_off = 3
 
 
 # Construct an arbitrary reversible continuous-time Markov process.
@@ -31,7 +33,7 @@ nsegments = 6
 # for the path history and for the tree history.
 
 
-all: toy.tree.ll.db path.likelihood.txt
+all: toy.tree.ll.db toy.tree.bp.ll.db path.ll.txt path.bp.ll.txt
 
 toy.rate.matrix.db:
 	python $(myscripts)/create-random-rate-matrix.py \
@@ -51,22 +53,41 @@ toy.path.history.db toy.tree.history.db:
 		--path-history=toy.path.history.db \
 		--tree-history=toy.tree.history.db
 
-path.likelihood.txt: toy.rate.matrix.db toy.partition.db \
-	toy.path.history.db
+
+# compute the non-blinking process log likelihoods
+
+path.ll.txt: toy.rate.matrix.db toy.path.history.db
+	python $(myscripts)/path-history-likelihood.py \
+		--rates=toy.rate.matrix.db \
+		--history=toy.path.history.db \
+		> path.ll.txt
+
+toy.tree.ll.db: toy.rate.matrix.db toy.tree.history.db
+	python $(myscripts)/tree-histories-likelihoods.py \
+		--rates=toy.rate.matrix.db \
+		--histories=toy.tree.history.db \
+		--outfile=toy.tree.ll.db
+
+
+# compute the blinking process log likelihoods
+
+path.bp.ll.txt: toy.rate.matrix.db toy.partition.db toy.path.history.db
 	python $(myscripts)/path-history-blink-likelihood.py \
 		--rates=toy.rate.matrix.db \
-		--path-history=toy.path.history.db \
 		--partition=toy.partition.db \
+		--path-history=toy.path.history.db \
 		--method=dynamic \
-		--rate-on=1 --rate-off=3 \
-		> path.likelihood.txt
+		--rate-on=$(rate_on) --rate-off=$(rate_off) \
+		> path.bp.ll.txt
 
-toy.tree.ll.db: toy.rate.matrix.db toy.partition.db \
-	toy.tree.history.db
+toy.tree.bp.ll.db: toy.rate.matrix.db toy.partition.db toy.tree.history.db
 	python $(myscripts)/tree-histories-blink-likelihoods.py \
-		--rates=toy.rate.matrix.db --histories=toy.tree.history.db \
-		--rate-on=1 --rate-off=3 --partition=toy.partition.db \
-		--outfile=toy.tree.ll.db
+		--rates=toy.rate.matrix.db \
+		--partition=toy.partition.db \
+		--histories=toy.tree.history.db \
+		--rate-on=$(rate_on) --rate-off=$(rate_off) \
+		--outfile=toy.tree.bp.ll.db
+
 
 clean:
 	rm *.db

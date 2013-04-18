@@ -100,8 +100,9 @@ def main(args):
 
     # add the contribution of the primary state transitions
     for a, b in cmedbutil.pairwise(state_seq):
-        rate = dg[a][b]['weight']
-        log_likelihood += math.log(rate)
+        if a != b:
+            rate = dg[a][b]['weight']
+            log_likelihood += math.log(rate)
 
     # add the contribution of the dwell times
     for segment, state, duration in path_history:
